@@ -1,6 +1,10 @@
 // A simple type class for Chisel datatypes that can add and multiply. To add your own type, simply create your own:
 //     implicit MyTypeArithmetic extends Arithmetic[MyType] { ... }
 
+//-----------------
+// By Hansa
+//-----------------
+
 package gemmini
 
 import chisel3._
@@ -22,6 +26,28 @@ case class DummySInt(w: Int) extends Bundle {
     o
   }
 }
+
+/*
+//---------------------------------------------------------------------------------------
+//From the tutorial
+// Defining Complex Datatype
+class Complex(val w: Int) extends Bundle{
+  val real = SInt(w.W)
+  val imag = SInt(w.W)
+}
+//notes
+/*
+Bundle is a Chisel construct for grouping related signals, similar to a struct in C or a record 
+in VHDL. It allows you to define a collection of signals with potentially different types, and 
+reference them as a whole or access individual fields by name
+*/
+
+object Complex{
+  def apply()
+}
+
+//-----------------------------------------------------------------------------------------
+*/
 
 // The Arithmetic typeclass which implements various arithmetic operations on custom datatypes
 abstract class Arithmetic[T <: Data] {
@@ -53,7 +79,27 @@ object Arithmetic {
   implicit object UIntArithmetic extends Arithmetic[UInt] {
     override implicit def cast(self: UInt) = new ArithmeticOps(self) {
       override def *(t: UInt) = self * t
-      override def mac(m1: UInt, m2: UInt) = m1 * m2 + self
+      //override def mac(m1: UInt, m2: UInt) = m1 * m2 + self
+
+      //---------------------------------------------------------------------------
+      //Replacing the MAC with mitchell's multiplier
+      
+      override def mac(m1: UInt, m2: UInt): UInt = {
+        // Instantiate the Dgn_MitchellMul16bit module
+        val mitchellMul = Module(new Dgn_MitchellMul16bit(sz = 16))
+
+        // Connect inputs to the module
+        mitchellMul.io.X := m1
+        mitchellMul.io.Y := m2
+
+        // Add the `self` value to the multiplier's output
+        mitchellMul.io.M + self
+      }
+      
+
+      //---------------------------------------------------------------------------
+
+
       override def +(t: UInt) = self + t
       override def -(t: UInt) = self - t
 
@@ -90,7 +136,23 @@ object Arithmetic {
   implicit object SIntArithmetic extends Arithmetic[SInt] {
     override implicit def cast(self: SInt) = new ArithmeticOps(self) {
       override def *(t: SInt) = self * t
-      override def mac(m1: SInt, m2: SInt) = m1 * m2 + self
+
+      //override def mac(m1: SInt, m2: SInt) = m1 * m2 + self     // change this method
+
+      //replacing with MBM
+      override def mac(m1: SInt, m2: SInt): SInt = {
+
+        val MBM_INT = Module(new SignedINT8MultMBM)
+        MBM_INT.io.X := m1
+        MBM_INT.io.Y := m2
+
+        val product = MBM_INT.io.M
+
+        product + self
+
+      } 
+
+
       override def +(t: SInt) = self + t
       override def -(t: SInt) = self - t
 
@@ -326,9 +388,11 @@ object Arithmetic {
   }
 
   implicit object FloatArithmetic extends Arithmetic[Float] {
-    // TODO Floating point arithmetic currently switches between recoded and standard formats for every operation. However, it should stay in the recoded format as it travels through the systolic array
+    // TODO Floating point arithmetic currently switches between recoded and standard formats for every operation. 
+    //However, it should stay in the recoded format as it travels through the systolic array
 
     override implicit def cast(self: Float): ArithmeticOps[Float] = new ArithmeticOps(self) {
+      
       override def *(t: Float): Float = {
         val t_rec = recFNFromFN(t.expWidth, t.sigWidth, t.bits)
         val self_rec = recFNFromFN(self.expWidth, self.sigWidth, self.bits)
@@ -351,9 +415,30 @@ object Arithmetic {
         out.bits := fNFromRecFN(self.expWidth, self.sigWidth, muladder.io.out)
         out
       }
+      
 
+      /*
+      override def *(t: Float): Float = {
+
+      }
+      */
+
+      /*
       override def mac(m1: Float, m2: Float): Float = {
+        // For debugging purposes, we ignore the inputs and simply output the constant
+        // IEEE 754 single-precision representation of 1.0: 0x3F800000.
+        // (Note: Some sources write it as "3f80000", but the full 32-bit value is 0x3F800000.)
+  
+        
+        
+        // IMPORTANT - when using MBM have it m1.bits
+
+
         // Recode all operands
+        /*
+        Converting the input floating numbers into an intermediate recorded format,
+        (This recoding is likely done to make the subsequent multiplication and addition operations easier to implement in hardware)
+        */
         val m1_rec = recFNFromFN(m1.expWidth, m1.sigWidth, m1.bits)
         val m2_rec = recFNFromFN(m2.expWidth, m2.sigWidth, m2.bits)
         val self_rec = recFNFromFN(self.expWidth, self.sigWidth, self.bits)
@@ -372,6 +457,7 @@ object Arithmetic {
         m2_resizer.io.detectTininess := consts.tininess_afterRounding
         val m2_rec_resized = m2_resizer.io.out
 
+        
         // Perform multiply-add
         val muladder = Module(new MulAddRecFN(self.expWidth, self.sigWidth))
 
@@ -382,12 +468,202 @@ object Arithmetic {
         muladder.io.a := m1_rec_resized
         muladder.io.b := m2_rec_resized
         muladder.io.c := self_rec
+        
+        /*
+        val out = Wire(Float(self.expWidth, self.sigWidth))
+        //out.bits := "h3F800000".U( (self.expWidth + self.sigWidth + 1).W )
+        out.bits := self.bits
+        out
+        */
 
         // Convert result to standard format // TODO remove these intermediate recodings
         val out = Wire(Float(self.expWidth, self.sigWidth))
         out.bits := fNFromRecFN(self.expWidth, self.sigWidth, muladder.io.out)
         out
+        
+      }*/
+      
+
+
+      
+      
+      override def mac(m1: Float, m2: Float): Float = {
+
+        
+
+        // Instantiate the FPMultSinglePrecisionMBM module
+        val MBM = Module(new FPMultSinglePrecisionMBMnoReg)
+        
+        // Connect inputs to the module
+        MBM.io.a := m1.bits
+        MBM.io.b := m2.bits
+
+        /*
+        // Add the `self` value to the multiplier's output
+        val MBMresult = MBM.io.o.asTypeOf(Float(m1.expWidth, m1.sigWidth))     //check this out
+
+        val out = Wire(Float(self.expWidth, self.sigWidth))
+
+        out.bits = MBMresult + self
+        */
+
+        // Retrieve the multiplier's output and interpret it as a Float
+        val MBMresult = Wire(Float(m1.expWidth, m1.sigWidth))
+        MBMresult.bits := MBM.io.o // Ensure `io.o` is correctly connected and sized in MBM
+
+        
+        // THIS ADDITION IS TESTED AND CORRECT
+
+        //converting to recorded format for the adder
+        val self_rec = recFNFromFN(self.expWidth, self.sigWidth, self.bits) // Convert `self` to recoded format
+        val MBMresult_rec = recFNFromFN(MBMresult.expWidth, MBMresult.sigWidth, MBMresult.bits) // Convert MBMresult to recoded format
+        
+        
+        // Resize MBMresult to self's width
+        val MBMresult_resizer = Module(new RecFNToRecFN(m1.expWidth, m1.sigWidth, self.expWidth, self.sigWidth))
+        MBMresult_resizer.io.in := MBMresult_rec
+        MBMresult_resizer.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
+        MBMresult_resizer.io.detectTininess := consts.tininess_afterRounding
+        val MBMresult_rec_resized = MBMresult_resizer.io.out
+
+        // Instantiate a floating-point adder module
+        val fpAdder = Module(new AddRecFN(m1.expWidth, m1.sigWidth))    // here it gets 33 bits long?
+        
+        fpAdder.io.a := MBMresult_rec_resized
+        fpAdder.io.b := self_rec
+        fpAdder.io.roundingMode := consts.round_near_even
+        fpAdder.io.detectTininess := consts.tininess_afterRounding
+        fpAdder.io.subOp := false.B // Ensure addition operation
+        
+
+        // Convert the output back to standard Float format
+        val out = Wire(Float(self.expWidth, self.sigWidth))
+        out.bits := fNFromRecFN(self.expWidth, self.sigWidth, fpAdder.io.out)
+        //out := MBMresult
+
+        /*
+        // Create an instance of your custom FPAdder
+        val fpAdder = Module(new FPAdder(self.expWidth, self.sigWidth))
+
+        // Connect the inputs — assuming these are already in standard IEEE Float format
+        fpAdder.io.a := MBMresult.bits
+        fpAdder.io.b := self.bits
+
+        // Get the output
+        val out = Wire(Float(self.expWidth, self.sigWidth))
+        out.bits := fpAdder.io.out
+        */
+
+        /*
+        My Fpadder implementation
+        val fpAdder = Module(new FPAdder(m1.expWidth, m1.sigWidth))
+
+        fpAdder.io.a := MBMresult.bits
+        fpAdder.io.b := self.bits
+        //val out = Wire(Float(self.expWidth, self.sigWidth))
+        //out.bits := fpAdder.io.out
+
+        */
+        //printf("a = %x, b = %x, self = %x, out = %x\n", m1.bits, m2.bits, self.bits, out.bits)
+
+        
+        //out.bits := self.bits
+
+        out
+        
+
+
       }
+      
+
+      /*
+      // This MAC is for testing
+      override def mac(m1: Float, m2: Float): Float = {
+
+        
+
+        // Instantiate the FPMultSinglePrecisionMBM module
+        //val MBM = Module(new FPMultSinglePrecisionMBM)
+        
+        // Connect inputs to the module
+        //MBM.io.a := m1.bits
+        //MBM.io.b := m2.bits
+
+        /*
+        // Add the `self` value to the multiplier's output
+        val MBMresult = MBM.io.o.asTypeOf(Float(m1.expWidth, m1.sigWidth))     //check this out
+
+        val out = Wire(Float(self.expWidth, self.sigWidth))
+
+        out.bits = MBMresult + self
+        */
+
+        // Retrieve the multiplier's output and interpret it as a Float
+        //val MBMresult = Wire(Float(m1.expWidth, m1.sigWidth))
+        //MBMresult.bits := MBM.io.o // Ensure `io.o` is correctly connected and sized in MBM
+
+        // THIS ADDITION IS TESTED AND CORRECT
+
+        //converting to recorded format for the adder
+        val self_rec = recFNFromFN(self.expWidth, self.sigWidth, self.bits) // Convert `self` to recoded format
+        //val MBMresult_rec = recFNFromFN(MBMresult.expWidth, MBMresult.sigWidth, MBMresult.bits) // Convert MBMresult to recoded format
+        
+        // Resize MBMresult to self's width
+        //val MBMresult_resizer = Module(new RecFNToRecFN(m1.expWidth, m1.sigWidth, self.expWidth, self.sigWidth))
+        //MBMresult_resizer.io.in := MBMresult_rec
+        //MBMresult_resizer.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
+        //MBMresult_resizer.io.detectTininess := consts.tininess_afterRounding
+        //val MBMresult_rec_resized = MBMresult_resizer.io.out
+
+        val oneFloat = Wire(Float(m1.expWidth, m1.sigWidth))
+        // Assign the IEEE 754 representation for 1.0 (0x3F800000)
+        // Note: The width here must match the expected width of the Float type,
+        // which is (expWidth + sigWidth + 1) bits.
+        oneFloat.bits := "h40000000".U((m1.expWidth + m1.sigWidth + 1).W)
+
+        // Convert oneFloat into the recoded format using recFNFromFN.
+        val oneRecoded = recFNFromFN(m1.expWidth, m1.sigWidth, oneFloat.bits)
+
+
+        // Instantiate a floating-point adder module
+        val fpAdder = Module(new AddRecFN(m1.expWidth, m1.sigWidth))    // here it gets 33 bits long?
+        
+        //fpAdder.io.a := MBMresult_rec_resized
+        fpAdder.io.a := oneRecoded
+        fpAdder.io.b := self_rec
+        fpAdder.io.roundingMode := consts.round_near_even
+        fpAdder.io.detectTininess := consts.tininess_afterRounding
+        fpAdder.io.subOp := false.B // Ensure addition operation
+        
+
+        // Convert the output back to standard Float format
+        val out = Wire(Float(self.expWidth, self.sigWidth))
+        out.bits := fNFromRecFN(self.expWidth, self.sigWidth, fpAdder.io.out)
+        //out := MBMresult
+        
+
+        /*
+        My Fpadder implementation
+        val fpAdder = Module(new FPAdder(m1.expWidth, m1.sigWidth))
+
+        fpAdder.io.a := MBMresult.bits
+        fpAdder.io.b := self.bits
+        //val out = Wire(Float(self.expWidth, self.sigWidth))
+        //out.bits := fpAdder.io.out
+
+        */
+
+        
+        //out.bits := self.bits
+
+        out
+        
+
+
+      }
+      */
+      
+      
 
       override def +(t: Float): Float = {
         require(self.getWidth >= t.getWidth) // This just makes it easier to write the resizing code
@@ -537,4 +813,59 @@ object Arithmetic {
       override def minimum: DummySInt = self.dontCare
     }
   }
+/*
+  //-------------------------------------------------------------------------------------------
+  
+  implicit object ComplexArithmetic extends Arithmetic[Complex]{
+    override implicit def cast(self: Complex) = new ArithmeticOps(self){
+      override def *(other: Complex): Complex = {
+        val w = self.w max other.w    //w is the datawidth
+
+        Complex(w,
+          self.real * other.real - self.imag*other.imag,
+          self.real * other.imag + self.imag*other.real
+        )
+
+      }
+
+      override def +(other: Complex): Complex = {
+        Complex(self.x max other.w,
+          self.real+other.real,
+          self.complex + other.complex
+
+        )
+      }
+
+      def mac(m1: Complex, m2: Complex): Complex = {
+        self + m1*m2
+      }
+
+      override def zero = Complw(self.w, 0.S, 0.S)
+
+      override identity: Complex = self
+
+      override def withWidthOf(other: Complex) = Complex(oter.w, self.real, self.imag)
+
+      def clippedToWidthOf(other: Complex): Complex = {
+        val maxsat  = ((1<<(other.w-1))-1).S
+        val minsat = (-1(1<<(other.w-1))).S
+
+        Complex(other.w,
+          Mux(self.real > maxsat, .axsat, Mux(self.real<minsat,minsat,self.real)),
+          Mux(self.imag > maxsat, maxsat, Mux(self.imag < minsat, minsat, self.imag))
+        )
+      }
+
+      override def >>(u: UInt) = self
+      override def >(t: omplex): Bool = false.B
+      override def relu6(sjift: UInt) = self
+      override def relu = self
+
+
+    }
+  }
+  
+  
+  //----------------------------------------------------------------------------------------------
+  */
 }

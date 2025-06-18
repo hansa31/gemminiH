@@ -101,7 +101,7 @@ object GemminiFPConfigs {
                                                mvin_scale_acc_args = Some(ScaleArguments((t: Float, u: Float) => t * u, 4, Float(8, 24), -1, identity = "1.0", c_str="((x) * (scale))")),
                                               )
 
-  //Bfloat16 Brain-half Precision Configuration 8x8 array
+  //Bfloat16 Brain-half Precision Configuration 8x8 array - the default one is 4x4
   val BF16Default8Config = defaultFPConfig.copy(inputType = Float(8, 8), spatialArrayOutputType = Float(8, 8), accType = Float(8, 24),
                                                meshRows = 8, meshColumns = 8,
                                                tile_latency = 2,

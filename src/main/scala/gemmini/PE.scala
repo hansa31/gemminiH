@@ -4,12 +4,34 @@ package gemmini
 import chisel3._
 import chisel3.util._
 
+// I am trying to understand chisel code
+// Parameterized bundle PECControl of type T, subtype of Data and must 
+// have Arithmatic typeclaass
 class PEControl[T <: Data : Arithmetic](accType: T) extends Bundle {
   val dataflow = UInt(1.W) // TODO make this an Enum
   val propagate = UInt(1.W) // Which register should be propagated (and which should be accumulated)?
   val shift = UInt(log2Up(accType.getWidth).W) // TODO this isn't correct for Floats
-
+  //log2Up --> calculate the shift amount based on the width of the accumulator type
 }
+
+/** Compute the log2 of a Scala integer, rounded up.
+  * Useful for getting the number of bits needed to represent some number of states (in - 1).
+  * To get the number of bits needed to represent some number n, use log2Ceil(n + 1).
+  *
+  * Note: can return zero, and should not be used in cases where it may generate unsupported
+  * zero-width wires.
+  *
+  * @example {{{
+  * log2Ceil(1)  // returns 0
+  * log2Ceil(2)  // returns 1
+  * log2Ceil(3)  // returns 2
+  * log2Ceil(4)  // returns 2
+  * }}}
+  */
+
+//IMPORTANT
+// parameterized with arithmatics
+// ev --> provides acess to the arithmatic operations
 
 class MacUnit[T <: Data](inputType: T, cType: T, dType: T) (implicit ev: Arithmetic[T]) extends Module {
   import ev._
@@ -86,7 +108,7 @@ class PE[T <: Data](inputType: T, outputType: T, accType: T, df: Dataflow.Value,
 
   mac_unit.io.in_a := a
 
-  val last_s = RegEnable(prop, valid)
+  val last_s = RegEnable(prop, valid)     // Creates a register last_s that saves the value of prop when signal valid is True.
   val flip = last_s =/= prop
   val shift_offset = Mux(flip, shift, 0.U)
 
@@ -99,6 +121,15 @@ class PE[T <: Data](inputType: T, outputType: T, accType: T, df: Dataflow.Value,
   val PROPAGATE = 1.U(1.W)
 
   io.bad_dataflow := false.B
+
+  /*
+  Selects how the PE performs its MAC operations depending on the activated dataflow mode 
+  or the operation is in propagate mode or compute mode (prop signal 1 or 0)
+
+  It uses 2 registers c1 and c2 to hold intermediate or accumilated values.
+  
+  */
+
   when ((df == Dataflow.OS).B || ((df == Dataflow.BOTH).B && dataflow === OUTPUT_STATIONARY)) {
     when(prop === PROPAGATE) {
       io.out_c := (c1 >> shift_offset).clippedToWidthOf(outputType)
