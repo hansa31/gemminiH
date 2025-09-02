@@ -34,6 +34,15 @@ object GemminiCustomConfigs {
   )
 
   // Create your own configs here
+  val baselineInferenceConfig4x4 = defaultConfig.copy(   //in 8, out 32, saOuttypr 20.
+    meshRows = 4,
+    meshColumns = 4,
+    has_training_convs = false,
+  )
+
+  
+
+  // Create your own configs here
   val baselineInferenceConfig8x8 = defaultConfig.copy(   //in 8, out 32, saOuttypr 20.
     meshRows = 8,
     meshColumns = 8,
@@ -47,6 +56,16 @@ object GemminiCustomConfigs {
     inputType = SInt(8.W),
     accType = SInt(16.W),
     spatialArrayOutputType = SInt(16.W),
+    dma_buswidth = 64,
+    has_training_convs = false,
+  )
+
+  val baselineInferenceConfigDefaultINT8x8 = defaultConfig.copy(   //in 8, out 16, saOuttypr 16.
+    meshRows = 8,
+    meshColumns = 8,
+    inputType = SInt(8.W),
+    accType = SInt(32.W),
+    spatialArrayOutputType = SInt(20.W),
     dma_buswidth = 64,
     has_training_convs = false,
   )
@@ -129,12 +148,14 @@ object GemminiCustomConfigs {
   //val customConfig = unsignedBaselineInferenceConfig
   //val customConfig = trainingConfig
   //val customConfig = vivadoRiscvgem4FP
+  val customConfig = GemminiFPConfigs.FP16DefaultConfig
 
-  //val customConfig = baselineInferenceConfig
+
+  //val customConfig = baselineInferenceConfig4x4
 
   //val customConfig = baselineInferenceConfig8x8
 
-  val customConfig = baselineInferenceConfigSINT8x8
+  //val customConfig = baselineInferenceConfigDefaultINT8x8
 
   //val customConfig = vivadoRiscvgem4
   //val customConfig = complexConfig

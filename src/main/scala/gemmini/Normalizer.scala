@@ -205,8 +205,36 @@ class MulPipe[T <: Data, U <: Data](scale_t: U)(implicit ev: Arithmetic[T])
     val out = Decoupled(scale_t.cloneType)
   })
 
+  /*
   scale_t match {
     case Float(expWidth, sigWidth) =>
+      val self_rec = recFNFromFN(expWidth, sigWidth, io.ins.bits.x.asUInt)
+      val scale_rec = recFNFromFN(expWidth, sigWidth, io.ins.bits.y.asUInt)
+
+      val mul = Module(new MulRecFN(expWidth, sigWidth))
+
+      mul.io.roundingMode := consts.round_near_even
+      mul.io.detectTininess := consts.tininess_afterRounding
+
+      mul.io.a := self_rec
+      mul.io.b := scale_rec
+
+      val mul_result = fNFromRecFN(expWidth, sigWidth, mul.io.out).asTypeOf(scale_t)
+
+      val pipe = Module(new Pipeline(scale_t.cloneType, 2)())
+
+      pipe.io.in.valid := io.ins.valid
+      pipe.io.in.bits := mul_result
+      io.ins.ready := pipe.io.in.ready
+
+//      pipe.io.out.ready := io.out.ready
+//      io.out.bits := pipe.io.out.bits
+//      io.out.valid := pipe.io.out.valid
+      io.out <> pipe.io.out
+  }*/
+
+  scale_t match {
+    case Float(expWidth, sigWidth, false) =>
       val self_rec = recFNFromFN(expWidth, sigWidth, io.ins.bits.x.asUInt)
       val scale_rec = recFNFromFN(expWidth, sigWidth, io.ins.bits.y.asUInt)
 
@@ -541,8 +569,43 @@ class Normalizer[T <: Data, U <: Data](max_len: Int, num_reduce_lanes: Int, num_
   val exp_divider_in = Wire(Decoupled(UInt(0.W)))
   val exp_divider_out = Wire(Decoupled(scale_t.cloneType))
 
+  /*
   scale_t match {
     case Float(expWidth, sigWidth) =>
+
+      exp_divider_in.bits := DontCare
+
+      // We translate our integer to floating-point form so that we can use the hardfloat divider
+      def in_to_float(x: SInt) = {
+        val in_to_rec_fn = Module(new INToRecFN(intWidth = sum_exp_to_inv.getWidth, expWidth, sigWidth))
+        in_to_rec_fn.io.signedIn := true.B
+        in_to_rec_fn.io.in := x.asUInt
+        in_to_rec_fn.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
+        in_to_rec_fn.io.detectTininess := consts.tininess_afterRounding
+
+        in_to_rec_fn.io.out
+      }
+
+      val self_rec = in_to_float(sum_exp_to_inv.asUInt.asSInt)
+      val one_rec = in_to_float(127.S) // softmax maximum is 127 for signed int8
+
+      // Instantiate the hardloat divider
+      val divider = Module(new DivSqrtRecFN_small(expWidth, sigWidth, 16))
+
+      exp_divider_in.ready := divider.io.inReady
+      divider.io.inValid := exp_divider_in.valid
+      divider.io.sqrtOp := false.B
+      divider.io.a := one_rec
+      divider.io.b := self_rec
+      divider.io.roundingMode := consts.round_near_even
+      divider.io.detectTininess := consts.tininess_afterRounding
+
+      exp_divider_out.valid := divider.io.outValid_div
+      exp_divider_out.bits := fNFromRecFN(expWidth, sigWidth, divider.io.out).asTypeOf(scale_t)
+  }*/
+
+  scale_t match {
+    case Float(expWidth, sigWidth, false) =>
 
       exp_divider_in.bits := DontCare
 

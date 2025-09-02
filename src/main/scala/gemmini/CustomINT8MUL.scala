@@ -7,7 +7,7 @@ import chisel3._
 import chisel3.util._
 
 
-class SignedINT8MultMBM(val sz: Int = 8) extends Module {
+class CustomINT8MUL(val sz: Int = 8) extends Module {
   val io = IO(new Bundle {
     val X = Input(SInt(sz.W))
     val Y = Input(SInt(sz.W))

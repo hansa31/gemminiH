@@ -12,11 +12,18 @@ import chisel3.util._
 import hardfloat._
 
 // Bundles that represent the raw bits of custom datatypes
+
+case class Float(expWidth: Int, sigWidth: Int, isRecoded: Boolean = false) extends Bundle {
+  val bits = UInt((expWidth + sigWidth + (if (isRecoded) 1 else 0)).W)
+
+  val bias: Int = (1 << (expWidth-1)) - 1
+}
+/*
 case class Float(expWidth: Int, sigWidth: Int) extends Bundle {
   val bits = UInt((expWidth + sigWidth).W)
 
   val bias: Int = (1 << (expWidth-1)) - 1
-}
+}*/
 
 case class DummySInt(w: Int) extends Bundle {
   val bits = UInt(w.W)
@@ -137,8 +144,9 @@ object Arithmetic {
     override implicit def cast(self: SInt) = new ArithmeticOps(self) {
       override def *(t: SInt) = self * t
 
-      //override def mac(m1: SInt, m2: SInt) = m1 * m2 + self     // change this method
+      override def mac(m1: SInt, m2: SInt) = m1 * m2 + self     // change this method
 
+      /*
       //replacing with MBM
       override def mac(m1: SInt, m2: SInt): SInt = {
 
@@ -150,7 +158,21 @@ object Arithmetic {
 
         product + self
 
-      } 
+      } */
+
+      /*
+      // The above MAC works. This is only to test the framework building
+      override def mac(m1: SInt, m2: SInt): SInt = {
+
+        val MBM_INT = Module(new CustomINT8MUL)
+        MBM_INT.io.X := m1
+        MBM_INT.io.Y := m2
+
+        val product = MBM_INT.io.M
+
+        product + self
+
+      }*/
 
 
       override def +(t: SInt) = self + t
@@ -306,6 +328,89 @@ object Arithmetic {
         Some((input, output))
       }
 
+
+
+      override def reciprocal[U <: Data](u: U, options: Int = 0): Option[(DecoupledIO[UInt], DecoupledIO[U])] = u match {
+        case Float(expWidth, sigWidth, false) =>
+          val input = Wire(Decoupled(UInt(0.W)))
+          val output = Wire(Decoupled(u.cloneType))
+
+          input.bits := DontCare
+
+          // We translate our integer to floating-point form so that we can use the hardfloat divider
+          def in_to_float(x: SInt) = {
+            val in_to_rec_fn = Module(new INToRecFN(intWidth = self.getWidth, expWidth, sigWidth))
+            in_to_rec_fn.io.signedIn := true.B
+            in_to_rec_fn.io.in := x.asUInt
+            in_to_rec_fn.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
+            in_to_rec_fn.io.detectTininess := consts.tininess_afterRounding
+
+            in_to_rec_fn.io.out
+          }
+
+          val self_rec = in_to_float(self)
+          val one_rec = in_to_float(1.S)
+
+          // Instantiate the hardloat divider
+          val divider = Module(new DivSqrtRecFN_small(expWidth, sigWidth, options))
+
+          input.ready := divider.io.inReady
+          divider.io.inValid := input.valid
+          divider.io.sqrtOp := false.B
+          divider.io.a := one_rec
+          divider.io.b := self_rec
+          divider.io.roundingMode := consts.round_near_even
+          divider.io.detectTininess := consts.tininess_afterRounding
+
+          output.valid := divider.io.outValid_div
+          output.bits := fNFromRecFN(expWidth, sigWidth, divider.io.out).asTypeOf(u)
+
+          assert(!output.valid || output.ready)
+
+          Some((input, output))
+
+        case _ => None
+      }
+
+       override def mult_with_reciprocal[U <: Data](reciprocal: U): SInt = reciprocal match {
+        case recip @ Float(expWidth, sigWidth, false) =>
+          def in_to_float(x: SInt) = {
+            val in_to_rec_fn = Module(new INToRecFN(intWidth = self.getWidth, expWidth, sigWidth))
+            in_to_rec_fn.io.signedIn := true.B
+            in_to_rec_fn.io.in := x.asUInt
+            in_to_rec_fn.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
+            in_to_rec_fn.io.detectTininess := consts.tininess_afterRounding
+
+            in_to_rec_fn.io.out
+          }
+
+          def float_to_in(x: UInt) = {
+            val rec_fn_to_in = Module(new RecFNToIN(expWidth = expWidth, sigWidth, self.getWidth))
+            rec_fn_to_in.io.signedOut := true.B
+            rec_fn_to_in.io.in := x
+            rec_fn_to_in.io.roundingMode := consts.round_minMag
+
+            rec_fn_to_in.io.out.asSInt
+          }
+
+          val self_rec = in_to_float(self)
+          val reciprocal_rec = recFNFromFN(expWidth, sigWidth, recip.bits)
+
+          // Instantiate the hardloat divider
+          val muladder = Module(new MulRecFN(expWidth, sigWidth))
+          muladder.io.roundingMode := consts.round_near_even
+          muladder.io.detectTininess := consts.tininess_afterRounding
+
+          muladder.io.a := self_rec
+          muladder.io.b := reciprocal_rec
+
+          float_to_in(muladder.io.out)
+
+        case _ => self
+      }
+
+
+      /*
       override def reciprocal[U <: Data](u: U, options: Int = 0): Option[(DecoupledIO[UInt], DecoupledIO[U])] = u match {
         case Float(expWidth, sigWidth) =>
           val input = Wire(Decoupled(UInt(0.W)))
@@ -383,10 +488,214 @@ object Arithmetic {
           float_to_in(muladder.io.out)
 
         case _ => self
+      }*/
+    }
+  }
+
+
+   implicit object FloatArithmetic extends Arithmetic[Float] {
+    // TODO Floating point arithmetic currently switches between recoded and standard formats for every operation. However, it should stay in the recoded format as it travels through the systolic array
+
+    override implicit def cast(self: Float): ArithmeticOps[Float] = new ArithmeticOps(self) {
+      override def *(t: Float): Float = {
+        val t_rec = if (t.isRecoded) t.bits else recFNFromFN(t.expWidth, t.sigWidth, t.bits)
+        val self_rec = if (self.isRecoded) self.bits else recFNFromFN(self.expWidth, self.sigWidth, self.bits)
+
+        val t_resizer =  Module(new RecFNToRecFN(t.expWidth, t.sigWidth, self.expWidth, self.sigWidth))
+        t_resizer.io.in := t_rec
+        t_resizer.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
+        t_resizer.io.detectTininess := consts.tininess_afterRounding
+        val t_rec_resized = t_resizer.io.out
+
+        val muladder = Module(new MulRecFN(self.expWidth, self.sigWidth))
+
+        muladder.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
+        muladder.io.detectTininess := consts.tininess_afterRounding
+
+        muladder.io.a := self_rec
+        muladder.io.b := t_rec_resized
+
+        val out = Wire(Float(self.expWidth, self.sigWidth, self.isRecoded))
+        out.bits := (if (out.isRecoded) muladder.io.out else fNFromRecFN(self.expWidth, self.sigWidth, muladder.io.out))
+        out
+      }
+
+      override def mac(m1: Float, m2: Float): Float = {
+        // Recode all operands
+        val m1_rec = if (m1.isRecoded) m1.bits else recFNFromFN(m1.expWidth, m1.sigWidth, m1.bits)
+        val m2_rec = if (m2.isRecoded) m2.bits else recFNFromFN(m2.expWidth, m2.sigWidth, m2.bits)
+        val self_rec = if (self.isRecoded) self.bits else recFNFromFN(self.expWidth, self.sigWidth, self.bits)
+
+        // Resize m1 to self's width
+        val m1_resizer = Module(new RecFNToRecFN(m1.expWidth, m1.sigWidth, self.expWidth, self.sigWidth))
+        m1_resizer.io.in := m1_rec
+        m1_resizer.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
+        m1_resizer.io.detectTininess := consts.tininess_afterRounding
+        val m1_rec_resized = m1_resizer.io.out
+
+        // Resize m2 to self's width
+        val m2_resizer = Module(new RecFNToRecFN(m2.expWidth, m2.sigWidth, self.expWidth, self.sigWidth))
+        m2_resizer.io.in := m2_rec
+        m2_resizer.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
+        m2_resizer.io.detectTininess := consts.tininess_afterRounding
+        val m2_rec_resized = m2_resizer.io.out
+
+        // Perform multiply-add
+        val muladder = Module(new MulAddRecFN(self.expWidth, self.sigWidth))
+
+        muladder.io.op := 0.U
+        muladder.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
+        muladder.io.detectTininess := consts.tininess_afterRounding
+
+        muladder.io.a := m1_rec_resized
+        muladder.io.b := m2_rec_resized
+        muladder.io.c := self_rec
+
+        // Convert result to standard format // TODO remove these intermediate recodings
+        val out = Wire(Float(self.expWidth, self.sigWidth, self.isRecoded))
+        out.bits := (if (out.isRecoded) muladder.io.out else fNFromRecFN(self.expWidth, self.sigWidth, muladder.io.out))
+        out
+      }
+
+      override def +(t: Float): Float = {
+        require(self.getWidth >= t.getWidth) // This just makes it easier to write the resizing code
+
+        // Recode all operands
+        val t_rec = if (t.isRecoded) t.bits else recFNFromFN(t.expWidth, t.sigWidth, t.bits)
+        val self_rec = if (self.isRecoded) self.bits else recFNFromFN(self.expWidth, self.sigWidth, self.bits)
+
+        // Generate 1 as a float
+        val in_to_rec_fn = Module(new INToRecFN(1, self.expWidth, self.sigWidth))
+        in_to_rec_fn.io.signedIn := false.B
+        in_to_rec_fn.io.in := 1.U
+        in_to_rec_fn.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
+        in_to_rec_fn.io.detectTininess := consts.tininess_afterRounding
+
+        val one_rec = in_to_rec_fn.io.out
+
+        // Resize t
+        val t_resizer = Module(new RecFNToRecFN(t.expWidth, t.sigWidth, self.expWidth, self.sigWidth))
+        t_resizer.io.in := t_rec
+        t_resizer.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
+        t_resizer.io.detectTininess := consts.tininess_afterRounding
+        val t_rec_resized = t_resizer.io.out
+
+        // Perform addition
+        val muladder = Module(new MulAddRecFN(self.expWidth, self.sigWidth))
+
+        muladder.io.op := 0.U
+        muladder.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
+        muladder.io.detectTininess := consts.tininess_afterRounding
+
+        muladder.io.a := t_rec_resized
+        muladder.io.b := one_rec
+        muladder.io.c := self_rec
+
+        val result = Wire(Float(self.expWidth, self.sigWidth, self.isRecoded))
+        result.bits := (if (result.isRecoded) muladder.io.out else fNFromRecFN(self.expWidth, self.sigWidth, muladder.io.out))
+        result
+      }
+
+      override def -(t: Float): Float = {
+        val t_sgn = t.bits(t.getWidth-1)
+        val neg_t = Cat(~t_sgn, t.bits(t.getWidth-2,0)).asTypeOf(t)
+        self + neg_t
+      }
+
+      override def >>(u: UInt): Float = {
+        // Recode self
+        val self_rec = if (self.isRecoded) self.bits else recFNFromFN(self.expWidth, self.sigWidth, self.bits)
+
+        // Get 2^(-u) as a recoded float
+        val shift_exp = Wire(UInt(self.expWidth.W))
+        shift_exp := self.bias.U - u
+        val shift_fn = Cat(0.U(1.W), shift_exp, 0.U((self.sigWidth-1).W))
+        val shift_rec = recFNFromFN(self.expWidth, self.sigWidth, shift_fn)
+
+        assert(shift_exp =/= 0.U, "scaling by denormalized numbers is not currently supported")
+
+        // Multiply self and 2^(-u)
+        val muladder = Module(new MulRecFN(self.expWidth, self.sigWidth))
+
+        muladder.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
+        muladder.io.detectTininess := consts.tininess_afterRounding
+
+        muladder.io.a := self_rec
+        muladder.io.b := shift_rec
+
+        val result = Wire(Float(self.expWidth, self.sigWidth, self.isRecoded))
+        result.bits := (if (result.isRecoded) muladder.io.out else fNFromRecFN(self.expWidth, self.sigWidth, muladder.io.out))
+        result
+      }
+
+      override def >(t: Float): Bool = {
+        // Recode all operands
+        val t_rec = if (t.isRecoded) t.bits else recFNFromFN(t.expWidth, t.sigWidth, t.bits)
+        val self_rec = if (self.isRecoded) self.bits else recFNFromFN(self.expWidth, self.sigWidth, self.bits)
+
+        // Resize t to self's width
+        val t_resizer = Module(new RecFNToRecFN(t.expWidth, t.sigWidth, self.expWidth, self.sigWidth))
+        t_resizer.io.in := t_rec
+        t_resizer.io.roundingMode := consts.round_near_even
+        t_resizer.io.detectTininess := consts.tininess_afterRounding
+        val t_rec_resized = t_resizer.io.out
+
+        val comparator = Module(new CompareRecFN(self.expWidth, self.sigWidth))
+        comparator.io.a := self_rec
+        comparator.io.b := t_rec_resized
+        comparator.io.signaling := false.B
+
+        comparator.io.gt
+      }
+
+      override def withWidthOf(t: Float): Float = {
+        val self_rec = if (self.isRecoded) self.bits else recFNFromFN(self.expWidth, self.sigWidth, self.bits)
+
+        val resizer = Module(new RecFNToRecFN(self.expWidth, self.sigWidth, t.expWidth, t.sigWidth))
+        resizer.io.in := self_rec
+        resizer.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
+        resizer.io.detectTininess := consts.tininess_afterRounding
+
+        val result = Wire(Float(t.expWidth, t.sigWidth, t.isRecoded))
+        result.bits := (if (result.isRecoded) resizer.io.out else fNFromRecFN(t.expWidth, t.sigWidth, resizer.io.out))
+        result
+      }
+
+      override def clippedToWidthOf(t: Float): Float = {
+        // TODO check for overflow. Right now, we just assume that overflow doesn't happen
+        val self_rec = if (self.isRecoded) self.bits else recFNFromFN(self.expWidth, self.sigWidth, self.bits)
+
+        val resizer = Module(new RecFNToRecFN(self.expWidth, self.sigWidth, t.expWidth, t.sigWidth))
+        resizer.io.in := self_rec
+        resizer.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
+        resizer.io.detectTininess := consts.tininess_afterRounding
+
+        val result = Wire(Float(t.expWidth, t.sigWidth, t.isRecoded))
+        result.bits := (if (result.isRecoded) resizer.io.out else fNFromRecFN(t.expWidth, t.sigWidth, resizer.io.out))
+        result
+      }
+
+      override def relu: Float = {
+        val raw = if (self.isRecoded) rawFloatFromRecFN(self.expWidth, self.sigWidth, self.bits) else rawFloatFromFN(self.expWidth, self.sigWidth, self.bits)
+
+        val result = Wire(Float(self.expWidth, self.sigWidth, self.isRecoded))
+        result.bits := Mux(!raw.isZero && raw.sign, 0.U, self.bits)
+        result
+      }
+
+      override def zero: Float = 0.U.asTypeOf(self)
+      override def identity: Float = {
+        require(!self.isRecoded)
+        Cat(0.U(2.W), ~(0.U((self.expWidth-1).W)), 0.U((self.sigWidth-1).W)).asTypeOf(self)
+      }
+      override def minimum: Float = {
+        require(!self.isRecoded)
+        Cat(1.U, ~(0.U(self.expWidth.W)), 0.U((self.sigWidth-1).W)).asTypeOf(self)
       }
     }
   }
 
+  /*
   implicit object FloatArithmetic extends Arithmetic[Float] {
     // TODO Floating point arithmetic currently switches between recoded and standard formats for every operation. 
     //However, it should stay in the recoded format as it travels through the systolic array
@@ -423,7 +732,8 @@ object Arithmetic {
       }
       */
 
-      /*
+      //THis was the mac previously
+      
       override def mac(m1: Float, m2: Float): Float = {
         // For debugging purposes, we ignore the inputs and simply output the constant
         // IEEE 754 single-precision representation of 1.0: 0x3F800000.
@@ -481,18 +791,24 @@ object Arithmetic {
         out.bits := fNFromRecFN(self.expWidth, self.sigWidth, muladder.io.out)
         out
         
-      }*/
+      }
+
+      
       
 
 
       
-      
+       //THIS IS THE CORRECT MBM MAC
+      /*
       override def mac(m1: Float, m2: Float): Float = {
 
         
 
         // Instantiate the FPMultSinglePrecisionMBM module
-        val MBM = Module(new FPMultSinglePrecisionMBMnoReg)
+        //val MBM = Module(new FPMultSinglePrecisionMBMnoReg)
+
+        //making the FP16 MBM
+        val MBM = Module(new FPMultSinglePrecisionMBMnoReg(width=16, k= 11, expsz=5,mntsz=10))
         
         // Connect inputs to the module
         MBM.io.a := m1.bits
@@ -512,7 +828,7 @@ object Arithmetic {
         MBMresult.bits := MBM.io.o // Ensure `io.o` is correctly connected and sized in MBM
 
         
-        // THIS ADDITION IS TESTED AND CORRECT
+        // THIS ADDITION IS TESTED AND CORRECT (self can be a different bit length than the m1,m2)
 
         //converting to recorded format for the adder
         val self_rec = recFNFromFN(self.expWidth, self.sigWidth, self.bits) // Convert `self` to recoded format
@@ -527,7 +843,7 @@ object Arithmetic {
         val MBMresult_rec_resized = MBMresult_resizer.io.out
 
         // Instantiate a floating-point adder module
-        val fpAdder = Module(new AddRecFN(m1.expWidth, m1.sigWidth))    // here it gets 33 bits long?
+        val fpAdder = Module(new AddRecFN(self.expWidth, self.sigWidth))    // here it gets 33 bits long?
         
         fpAdder.io.a := MBMresult_rec_resized
         fpAdder.io.b := self_rec
@@ -574,7 +890,7 @@ object Arithmetic {
 
 
       }
-      
+      */
 
       /*
       // This MAC is for testing
@@ -795,7 +1111,7 @@ object Arithmetic {
       override def identity: Float = Cat(0.U(2.W), ~(0.U((self.expWidth-1).W)), 0.U((self.sigWidth-1).W)).asTypeOf(self)
       override def minimum: Float = Cat(1.U, ~(0.U(self.expWidth.W)), 0.U((self.sigWidth-1).W)).asTypeOf(self)
     }
-  }
+  }*/
 
   implicit object DummySIntArithmetic extends Arithmetic[DummySInt] {
     override implicit def cast(self: DummySInt) = new ArithmeticOps(self) {
