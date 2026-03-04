@@ -144,7 +144,7 @@ object Arithmetic {
     override implicit def cast(self: SInt) = new ArithmeticOps(self) {
       override def *(t: SInt) = self * t
 
-      override def mac(m1: SInt, m2: SInt) = m1 * m2 + self     // change this method
+      override def mac(m1: SInt, m2: SInt) = (m1 * m2)+ self     // change this method
 
       /*
       //replacing with MBM

@@ -148,10 +148,11 @@ object GemminiCustomConfigs {
   //val customConfig = unsignedBaselineInferenceConfig
   //val customConfig = trainingConfig
   //val customConfig = vivadoRiscvgem4FP
-  val customConfig = GemminiFPConfigs.FP16DefaultConfig
+  //val customConfig = GemminiFPConfigs.FP16DefaultConfig
 
 
   //val customConfig = baselineInferenceConfig4x4
+  val customConfig = baselineInferenceConfig
 
   //val customConfig = baselineInferenceConfig8x8
 
