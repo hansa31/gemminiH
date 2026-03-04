@@ -60,7 +60,9 @@ object GemminiCustomConfigs {
   )
 
   // Specify which of your custom configs you want to build here
-  val customConfig = unifiedMemConfig
+  //val customConfig = unifiedMemConfig
+  //val customConfig = GemminiFPConfigs.FP16DefaultConfig
+  val customConfig = GemminiFPConfigs.FP32DefaultConfig
 }
 
 

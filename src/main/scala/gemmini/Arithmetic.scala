@@ -352,6 +352,7 @@ object Arithmetic {
         out
       }
 
+      
       override def mac(m1: Float, m2: Float): Float = {
         // Recode all operands
         val m1_rec = if (m1.isRecoded) m1.bits else recFNFromFN(m1.expWidth, m1.sigWidth, m1.bits)
@@ -388,6 +389,106 @@ object Arithmetic {
         out.bits := (if (out.isRecoded) muladder.io.out else fNFromRecFN(self.expWidth, self.sigWidth, muladder.io.out))
         out
       }
+
+      /*
+      // MAC for the MBM
+      override def mac(m1: Float, m2: Float): Float = {
+
+        
+
+        // Instantiate the FPMultSinglePrecisionMBM module
+        //val MBM = Module(new FPMultSinglePrecisionMBMnoReg)
+
+        //making the FP16 MBM
+        val MBM = Module(new FPMultSinglePrecisionMBMnoReg(width=16, k= 11, expsz=5,mntsz=10))
+        
+        // Connect inputs to the module
+        MBM.io.a := m1.bits
+        MBM.io.b := m2.bits
+
+        /*
+        // Add the `self` value to the multiplier's output
+        val MBMresult = MBM.io.o.asTypeOf(Float(m1.expWidth, m1.sigWidth))     //check this out
+
+        val out = Wire(Float(self.expWidth, self.sigWidth))
+
+        out.bits = MBMresult + self
+        */
+
+        // Retrieve the multiplier's output and interpret it as a Float
+        val MBMresult = Wire(Float(m1.expWidth, m1.sigWidth))
+        MBMresult.bits := MBM.io.o // Ensure `io.o` is correctly connected and sized in MBM
+
+        
+        // THIS ADDITION IS TESTED AND CORRECT (self can be a different bit length than the m1,m2)
+
+        //converting to recorded format for the adder
+        //val self_rec = recFNFromFN(self.expWidth, self.sigWidth, self.bits) // Convert `self` to recoded format
+        
+        val self_rec = if (self.isRecoded) self.bits else recFNFromFN(self.expWidth, self.sigWidth, self.bits)
+        val MBMresult_rec = recFNFromFN(MBMresult.expWidth, MBMresult.sigWidth, MBMresult.bits) // Convert MBMresult to recoded format
+        
+        
+        // Resize MBMresult to self's width
+        val MBMresult_resizer = Module(new RecFNToRecFN(m1.expWidth, m1.sigWidth, self.expWidth, self.sigWidth))
+        MBMresult_resizer.io.in := MBMresult_rec
+        MBMresult_resizer.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
+        MBMresult_resizer.io.detectTininess := consts.tininess_afterRounding
+        val MBMresult_rec_resized = MBMresult_resizer.io.out
+
+        // Instantiate a floating-point adder module
+        val fpAdder = Module(new AddRecFN(self.expWidth, self.sigWidth))    // here it gets 33 bits long?
+        
+        fpAdder.io.a := MBMresult_rec_resized
+        fpAdder.io.b := self_rec
+        fpAdder.io.roundingMode := consts.round_near_even
+        fpAdder.io.detectTininess := consts.tininess_afterRounding
+        fpAdder.io.subOp := false.B // Ensure addition operation
+        
+
+        // Convert the output back to standard Float format
+        //val out = Wire(Float(self.expWidth, self.sigWidth))
+        //out.bits := fNFromRecFN(self.expWidth, self.sigWidth, fpAdder.io.out)
+        //out := MBMresult
+
+        val out = Wire(Float(self.expWidth, self.sigWidth, self.isRecoded))
+        out.bits := (if (out.isRecoded) fpAdder.io.out else fNFromRecFN(self.expWidth, self.sigWidth, fpAdder.io.out))
+        out
+
+        /*
+        // Create an instance of your custom FPAdder
+        val fpAdder = Module(new FPAdder(self.expWidth, self.sigWidth))
+
+        // Connect the inputs — assuming these are already in standard IEEE Float format
+        fpAdder.io.a := MBMresult.bits
+        fpAdder.io.b := self.bits
+
+        // Get the output
+        val out = Wire(Float(self.expWidth, self.sigWidth))
+        out.bits := fpAdder.io.out
+        */
+
+        /*
+        My Fpadder implementation
+        val fpAdder = Module(new FPAdder(m1.expWidth, m1.sigWidth))
+
+        fpAdder.io.a := MBMresult.bits
+        fpAdder.io.b := self.bits
+        //val out = Wire(Float(self.expWidth, self.sigWidth))
+        //out.bits := fpAdder.io.out
+
+        */
+        //printf("a = %x, b = %x, self = %x, out = %x\n", m1.bits, m2.bits, self.bits, out.bits)
+
+        
+        //out.bits := self.bits
+
+        //out
+        
+
+
+      }*/
+
 
       override def +(t: Float): Float = {
         require(self.getWidth >= t.getWidth) // This just makes it easier to write the resizing code
