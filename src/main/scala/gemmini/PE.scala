@@ -28,8 +28,9 @@ class MacUnit[T <: Data](inputType: T, weightType: T, cType: T, dType: T) (impli
   * A PE implementing a MAC operation. Configured as fully combinational when integrated into a Mesh.
   * @param width Data width of operands
   */
-class PE[T <: Data](inputType: T, weightType: T, outputType: T, accType: T, df: Dataflow.Value, max_simultaneous_matmuls: Int)
-                   (implicit ev: Arithmetic[T]) extends Module { // Debugging variables
+class PE[T <: Data](inputType: T, weightType: T, outputType: T, accType: T, df: Dataflow.Value, max_simultaneous_matmuls: Int,
+                    sIntMulBitWidth: Int = 8, sIntMulVariant: String = "Simple")
+                   (implicit ev: Arithmetic[T], mulContext: SIntMulContext = SIntMulContext(sIntMulVariant, sIntMulBitWidth)) extends Module { // Debugging variables
   import ev._
 
   val io = IO(new Bundle {

@@ -245,6 +245,31 @@ object GemminiConfigs {
 
   val leanPrintfConfig = defaultConfig.copy(dataflow=Dataflow.WS, max_in_flight_mem_reqs = 64, acc_read_full_width = false, ex_read_from_acc = false, ex_write_to_spad = false, hardcode_d_to_garbage_addr = true, use_firesim_simulation_counters=true)
 
+  // Helper functions to get default 4x4 configs with specific multiplier bitwidths
+  def getDefaultConfig(mulBitWidth: Int, mulVariant: String = "Simple"): GemminiArrayConfig[SInt, Float, Float] = {
+    defaultConfig.copy(
+      sIntMulBitWidth = mulBitWidth,
+      sIntMulVariant = mulVariant,
+      // Use 4x4 config for simple verification
+      meshRows = 4,
+      meshColumns = 4,
+      tileRows = 1,
+      tileColumns = 1,
+      sp_capacity = CapacityInKilobytes(64),
+      acc_capacity = CapacityInKilobytes(16)
+    )
+  }
+
+  def getInt8Config(): GemminiArrayConfig[SInt, Float, Float] = getDefaultConfig(8, "Simple")
+  def getInt6Config(): GemminiArrayConfig[SInt, Float, Float] = getDefaultConfig(6, "Simple")
+  def getInt4Config(): GemminiArrayConfig[SInt, Float, Float] = getDefaultConfig(4, "Simple")
+  def getInt16Config(): GemminiArrayConfig[SInt, Float, Float] = getDefaultConfig(16, "Simple")
+
+  // Helper functions with Dummy multiplier for testing
+  def getInt8ConfigDummy(): GemminiArrayConfig[SInt, Float, Float] = getDefaultConfig(8, "Dummy")
+  def getInt6ConfigDummy(): GemminiArrayConfig[SInt, Float, Float] = getDefaultConfig(6, "Dummy")
+  def getInt4ConfigDummy(): GemminiArrayConfig[SInt, Float, Float] = getDefaultConfig(4, "Dummy")
+
 }
 
 /**

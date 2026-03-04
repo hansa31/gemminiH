@@ -100,6 +100,9 @@ case class GemminiArrayConfig[T <: Data : Arithmetic, U <: Data, V <: Data](
                                                                              tl_ext_mem_base: BigInt = 0,
                                                                              clock_gate: Boolean = false,
 
+                                                                             sIntMulBitWidth: Int = 8,
+                                                                             sIntMulVariant: String = "Simple",
+
                                                                              headerFileName: String = "gemmini_params.h"
                                                        ) {
   require(inputType.getWidth == weightType.getWidth)
