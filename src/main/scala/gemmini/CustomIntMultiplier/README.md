@@ -2,6 +2,50 @@
 
 This directory contains parameterizable signed integer multiplier implementations for the Gemmini systolic array architecture. Users can select different multiplier designs and bitwidths to customize the MAC (Multiply-Accumulate) pipeline.
 
+## Quick Start: User Approach
+
+**The simplest way to integrate your custom multiplier:**
+
+1. **Edit `SimpleMul.scala`** - Replace the single line with your custom design:
+   ```scala
+   // BEFORE: Standard multiply
+   io.result := io.a * io.b
+   
+   // AFTER: Your custom multiplier (example: add +2 offset)
+   io.result := (io.a * io.b) + 2.S
+   ```
+
+2. **Configure bitwidth in CustomConfigs.scala:**
+   ```scala
+   val customConfig = GemminiConfigs.defaultConfig.copy(
+       sIntMulBitWidth = 8    // or 4, 6, 16, etc.
+   )
+   ```
+
+3. **Recompile** - that's it! The bitwidth automatically flows through:
+   ```
+   ExecuteController → MeshWithDelays → Mesh → Tile → PE → MacUnit → SimpleMul(bitWidth)
+   ```
+
+**Why this approach works:**
+- `bitWidth` is passed through the config → constructor parameter chain
+- **No implicit context issues** - it's just a regular parameter
+- Easy to understand and modify
+- Works with any bitwidth specified in the config
+
+### Available Template Options
+
+Use SimpleMul.scala as your starting point. Reference examples below:
+
+| Implementation | Code | Purpose |
+|---|---|---|
+| **Standard** | `io.result := io.a * io.b` | Default multiply |
+| **With offset** | `io.result := (io.a * io.b) + 2.S` | Demonstration |
+| **Booth encoding** | `io.result := boothMul(io.a, io.b, bitWidth)` | Area-optimized |
+| **Wallace tree** | `io.result := wallaceTreeMul(io.a, io.b, bitWidth)` | High-performance |
+
+---
+
 ## Overview
 
 The CustomIntMultiplier module replaces the inline multiplication operation in the original `SIntArithmetic.mac()` method with parameterizable hardware modules. This enables:

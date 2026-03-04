@@ -24,7 +24,7 @@ case class DummySInt(w: Int) extends Bundle {
 }
 
 // Context for custom multiplier configuration
-case class SIntMulContext(variant: String = "Dummy", bitWidth: Int = 8)
+case class SIntMulContext(variant: String = "Simple", bitWidth: Int = 8)
 object SIntMulContext {
   implicit val defaultContext: SIntMulContext = SIntMulContext()
 }
@@ -56,6 +56,7 @@ abstract class ArithmeticOps[T <: Data](self: T) {
 }
 
 object Arithmetic {
+
   // Factory function to create SInt multiplier modules based on variant and bitwidth
   def createSIntMultiplier(variant: String, bitWidth: Int): IntMultiplier = {
     variant.toLowerCase match {
@@ -107,14 +108,15 @@ object Arithmetic {
     override implicit def cast(self: SInt) = new ArithmeticOps(self) {
       override def *(t: SInt) = self * t
 
-      override def mac(m1: SInt, m2: SInt)(implicit mulContext: SIntMulContext = SIntMulContext.defaultContext) = {
-        // Dynamically instantiate the appropriate multiplier based on context
+      override def mac(m1: SInt, m2: SInt) = {
+        // Retrieve multiplier context from implicit scope (set by MacUnit)
+        val mulContext = implicitly[SIntMulContext]
         val mul = Module(Arithmetic.createSIntMultiplier(mulContext.variant, mulContext.bitWidth))
         mul.io.a := m1
         mul.io.b := m2
         // Extract the result and add the accumulation value
-        val mulResult = mul.io.result.asTypeOf(self)
-        mulResult + self
+        // Chisel automatically promotes SInt(2*bitWidth) to accType width during addition
+        mul.io.result + self
       }
       
       override def +(t: SInt) = self + t

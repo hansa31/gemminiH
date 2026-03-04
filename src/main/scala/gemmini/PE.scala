@@ -11,8 +11,11 @@ class PEControl[T <: Data : Arithmetic](accType: T) extends Bundle {
 
 }
 
-class MacUnit[T <: Data](inputType: T, weightType: T, cType: T, dType: T) (implicit ev: Arithmetic[T]) extends Module {
+class MacUnit[T <: Data](inputType: T, weightType: T, cType: T, dType: T, 
+                         val sIntMulVariant: String = "Simple", val sIntMulBitWidth: Int = 8) 
+                        (implicit ev: Arithmetic[T]) extends Module {
   import ev._
+  
   val io = IO(new Bundle {
     val in_a  = Input(inputType)
     val in_b  = Input(weightType)
@@ -20,6 +23,9 @@ class MacUnit[T <: Data](inputType: T, weightType: T, cType: T, dType: T) (impli
     val out_d = Output(dType)
   })
 
+  // Create implicit context for SInt multiplier selection
+  implicit val mulContext = SIntMulContext(sIntMulVariant, sIntMulBitWidth)
+  
   io.out_d := io.in_c.mac(io.in_a, io.in_b)
 }
 
@@ -30,7 +36,7 @@ class MacUnit[T <: Data](inputType: T, weightType: T, cType: T, dType: T) (impli
   */
 class PE[T <: Data](inputType: T, weightType: T, outputType: T, accType: T, df: Dataflow.Value, max_simultaneous_matmuls: Int,
                     sIntMulBitWidth: Int = 8, sIntMulVariant: String = "Simple")
-                   (implicit ev: Arithmetic[T], mulContext: SIntMulContext = SIntMulContext(sIntMulVariant, sIntMulBitWidth)) extends Module { // Debugging variables
+                   (implicit ev: Arithmetic[T]) extends Module { // Debugging variables
   import ev._
 
   val io = IO(new Bundle {
@@ -63,7 +69,7 @@ class PE[T <: Data](inputType: T, weightType: T, outputType: T, accType: T, df: 
   // MAC units. To force mac circuitry to be re-used, we create a "mac_unit"
   // module here which just performs a single MAC operation
   val mac_unit = Module(new MacUnit(inputType, weightType,
-    if (df == Dataflow.WS) outputType else accType, outputType))
+    if (df == Dataflow.WS) outputType else accType, outputType, sIntMulVariant, sIntMulBitWidth))
 
   val a  = io.in_a
   val b  = io.in_b

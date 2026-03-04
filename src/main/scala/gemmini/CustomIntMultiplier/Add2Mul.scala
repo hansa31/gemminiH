@@ -1,6 +1,13 @@
-// Example multiplier for demonstration purposes
-// Result: (io.a * io.b) + 2
-// This allows easy detection in simulations - the output will have a consistent +2 offset
+// ============================================================================
+// EXAMPLE MULTIPLIER - For documentation only
+// ============================================================================
+// This multiplier adds a fixed +2 offset to (a*b). It serves as a concrete
+// example of how to implement a custom multiplier in SimpleMul.scala.
+//
+// This is NOT the recommended way for users to integrate custom multipliers.
+// Instead, users should edit SimpleMul.scala directly with their custom design.
+// ============================================================================
+
 package gemmini
 
 import chisel3._

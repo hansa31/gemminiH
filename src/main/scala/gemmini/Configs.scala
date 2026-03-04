@@ -155,7 +155,6 @@ object GemminiConfigs {
 
     // SoC counters options
     num_counter = 8,
-
     // Scratchpad and Accumulator input/output options
     acc_read_full_width = true,
     acc_read_small_width = true,

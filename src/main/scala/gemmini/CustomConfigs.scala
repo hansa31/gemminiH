@@ -62,7 +62,33 @@ object GemminiCustomConfigs {
   // Specify which of your custom configs you want to build here
   //val customConfig = unifiedMemConfig
   //val customConfig = GemminiFPConfigs.FP16DefaultConfig
-  val customConfig = GemminiFPConfigs.FP32DefaultConfig
+  //val customConfig = GemminiFPConfigs.FP32DefaultConfig
+
+  // ===== TEST CONFIGS FOR MULTIPLIER TESTING =====
+  // BASELINE: 8-bit multiplier (default, uses current SimpleMul with +2.S)
+  // val customConfig = GemminiConfigs.defaultConfig.copy(
+  //                         sIntMulBitWidth = 8
+  //                     )
+  
+  // TEST 1: 4-bit multiplier
+  // Usage: Replace SimpleMul.scala content with FourBitMul.scala content, then uncomment below
+  // val customConfig = GemminiConfigs.defaultConfig.copy(
+  //                         sIntMulBitWidth = 4
+  //                     )
+  
+  // TEST 2: 6-bit multiplier
+  // val customConfig = GemminiConfigs.defaultConfig.copy(
+  //                         sIntMulBitWidth = 6
+  //                     )
+  
+  // TEST 3: 16-bit multiplier (high precision)
+  // val customConfig = GemminiConfigs.defaultConfig.copy(
+  //                         sIntMulBitWidth = 16
+  //                     )
+
+  val customConfig = baselineInferenceConfig
+
+
 }
 
 
