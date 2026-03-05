@@ -81,6 +81,29 @@ object GemminiCustomConfigs {
     has_training_convs = false,
   )
 
+  val smallGemminiV = defaultConfig.copy(
+    inputType = SInt(8.W),
+    weightType = SInt(8.W),
+    accType = SInt(32.W),
+    spatialArrayInputType = SInt(8.W),
+    spatialArrayWeightType = SInt(8.W),
+    spatialArrayOutputType = SInt(20.W),
+
+    //sIntMulVariant = "verilog",  // Use the Verilog multiplier (see VerilogMul.scala)
+    
+    meshRows = 4,
+    meshColumns = 4,
+    tileRows = 1,
+    tileColumns = 1,
+    
+    dataflow = Dataflow.WS,
+    
+    sp_capacity = CapacityInKilobytes(64),
+    acc_capacity = CapacityInKilobytes(16),
+    
+    has_training_convs = false,
+  )
+
   // Specify which of your custom configs you want to build here
   //val customConfig = unifiedMemConfig
   //val customConfig = GemminiFPConfigs.FP16DefaultConfig
@@ -93,28 +116,28 @@ object GemminiCustomConfigs {
   // 2. Uncomment the bitwidth config you want to test
   // 3. Recompile - that's it!
   
-  val int4Config = smallGemmini.copy(
-    sIntMulBitWidth = 4  // 4-bit multiplier
-  )
+  // val int4Config = smallGemmini.copy(
+  //   sIntMulBitWidth = 4  // 4-bit multiplier
+  // )
   
-  val int6Config = smallGemmini.copy(
-    sIntMulBitWidth = 6  // 6-bit multiplier
-  )
+  // val int6Config = smallGemmini.copy(
+  //   sIntMulBitWidth = 6  // 6-bit multiplier
+  // )
   
-  val int8Config = smallGemmini.copy(
-    sIntMulBitWidth = 8  // 8-bit multiplier (default)
-  )
+  // val int8Config = smallGemmini.copy(
+  //   sIntMulBitWidth = 8  // 8-bit multiplier (default)
+  // )
   
-  val int16Config = smallGemmini.copy(
-    sIntMulBitWidth = 16  // 16-bit multiplier (high precision)
-  )
+  // val int16Config = smallGemmini.copy(
+  //   sIntMulBitWidth = 16  // 16-bit multiplier (high precision)
+  // )
 
   // Uncomment the config you want to use:
   //val customConfig = int8Config
   // val customConfig = int4Config
   // val customConfig = int6Config
   // val customConfig = int16Config
-  val customConfig = int6Config
+  val customConfig = smallGemminiV
 
 
 }

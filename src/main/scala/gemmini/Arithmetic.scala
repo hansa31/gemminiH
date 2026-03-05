@@ -63,6 +63,7 @@ object Arithmetic {
       case "simple" => new SimpleMul(bitWidth)
       case "dummy" => new DummyMul(bitWidth)
       case "add2" => new Add2Mul(bitWidth)
+      case "verilog" => new VerilogMul(bitWidth)
       case _ => new SimpleMul(bitWidth)  // Default to SimpleMul
     }
   }

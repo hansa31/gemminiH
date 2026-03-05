@@ -5,12 +5,18 @@
 // The `sIntMulBitWidth` config parameter does NOT reach here due to
 // compile-time implicit resolution in Arithmetic.scala.
 //
-// To use reduced precision (e.g., INT4):
+// You have TWO options for implementing your multiplier:
+//
+//   Option A (Chisel):  Write multiply logic directly in Scala/Chisel below
+//   Option B (Verilog): Set useVerilog=true to use your Verilog module from
+//                        src/main/resources/vsrc/VerilogMul.v
+//
+// To use reduced precision (e.g., INT4) with Chisel mode:
 //   1. Change `mulPrecision` below from `bitWidth` to your desired value (e.g., 4)
 //   2. Choose truncation mode: `truncate` (fast) or `clip` (safe, uses more HW)
 //   3. Recompile — that's it!
 //
-// Precision examples:
+// Precision examples (Chisel mode only):
 //   val mulPrecision = bitWidth  // Full 8-bit multiply (default Gemmini)
 //   val mulPrecision = 4         // INT4: inputs truncated to [-8, +7]
 //   val mulPrecision = 6         // INT6: inputs truncated to [-32, +31]
@@ -26,16 +32,28 @@ package gemmini
 import chisel3._
 
 class SimpleMul(bitWidth: Int) extends IntMultiplier(bitWidth) {
-  // ========================
-  // SET YOUR PRECISION HERE
-  // ========================
-  val mulPrecision = bitWidth  // Change to 4 for INT4, 6 for INT6, etc.
+  // ===========================
+  // CHOOSE YOUR MULTIPLIER MODE
+  // ===========================
+  val useVerilog  = true       // Set to true to use Verilog BlackBox (VerilogMul.v)
+  val mulPrecision = 4   // Change to 4 for INT4, 6 for INT6, etc. (works in BOTH modes)
 
-  if (mulPrecision >= bitWidth) {
-    // Full-precision multiply (standard 8-bit Gemmini behavior)
+  if (useVerilog) {
+    // ---- Option B: Verilog BlackBox multiplier ----
+    // Instantiates the Verilog module from src/main/resources/vsrc/VerilogMul.v
+    // Edit that .v file to swap in your own RTL (Booth, Wallace tree, approximate, etc.)
+    // mulPrecision is passed as the PRECISION parameter to the Verilog module
+    val verilogMul = Module(new VerilogMulBlackBox(bitWidth, mulPrecision))
+    verilogMul.io.a := io.a.asUInt
+    verilogMul.io.b := io.b.asUInt
+    io.result := verilogMul.io.result.asSInt
+
+  } else if (mulPrecision >= bitWidth) {
+    // ---- Option A: Full-precision Chisel multiply (standard 8-bit Gemmini behavior) ----
     io.result := io.a * io.b
+
   } else {
-    // Reduced-precision multiply:
+    // ---- Option A: Reduced-precision Chisel multiply ----
     // Step 1: Truncate 8-bit inputs to mulPrecision bits
     //         Use `clip` instead of `truncate` for saturation (safer but more HW)
     val a_trunc = truncate(io.a, mulPrecision)
