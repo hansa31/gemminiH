@@ -86,29 +86,35 @@ object GemminiCustomConfigs {
   //val customConfig = GemminiFPConfigs.FP16DefaultConfig
   //val customConfig = GemminiFPConfigs.FP32DefaultConfig
 
-  // ===== TEST CONFIGS FOR MULTIPLIER TESTING =====
-  // BASELINE: 8-bit multiplier (default, uses current SimpleMul with +2.S)
-  // val customConfig = GemminiConfigs.defaultConfig.copy(
-  //                         sIntMulBitWidth = 8
-  //                     )
+  // ===== CUSTOM MULTIPLIER BITWIDTH CONFIGS =====
+  // Based on smallGemmini (4x4 mesh, WS dataflow, optimized for INT8)
+  // HOW TO USE:
+  // 1. Edit SimpleMul.scala with your custom multiplier design
+  // 2. Uncomment the bitwidth config you want to test
+  // 3. Recompile - that's it!
   
-  // TEST 1: 4-bit multiplier
-  // Usage: Replace SimpleMul.scala content with FourBitMul.scala content, then uncomment below
-  // val customConfig = GemminiConfigs.defaultConfig.copy(
-  //                         sIntMulBitWidth = 4
-  //                     )
+  val int4Config = smallGemmini.copy(
+    sIntMulBitWidth = 4  // 4-bit multiplier
+  )
   
-  // TEST 2: 6-bit multiplier
-  // val customConfig = GemminiConfigs.defaultConfig.copy(
-  //                         sIntMulBitWidth = 6
-  //                     )
+  val int6Config = smallGemmini.copy(
+    sIntMulBitWidth = 6  // 6-bit multiplier
+  )
   
-  // TEST 3: 16-bit multiplier (high precision)
-  // val customConfig = GemminiConfigs.defaultConfig.copy(
-  //                         sIntMulBitWidth = 16
-  //                     )
+  val int8Config = smallGemmini.copy(
+    sIntMulBitWidth = 8  // 8-bit multiplier (default)
+  )
+  
+  val int16Config = smallGemmini.copy(
+    sIntMulBitWidth = 16  // 16-bit multiplier (high precision)
+  )
 
-  val customConfig = baselineInferenceConfig
+  // Uncomment the config you want to use:
+  //val customConfig = int8Config
+  // val customConfig = int4Config
+  // val customConfig = int6Config
+  // val customConfig = int16Config
+  val customConfig = int6Config
 
 
 }
