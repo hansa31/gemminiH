@@ -59,6 +59,28 @@ object GemminiCustomConfigs {
     acc_sub_banks = 1
   )
 
+  // Small INT8 config optimized for MobileNet with WS dataflow
+  val smallGemmini = defaultConfig.copy(
+    inputType = SInt(8.W),
+    weightType = SInt(8.W),
+    accType = SInt(32.W),
+    spatialArrayInputType = SInt(8.W),
+    spatialArrayWeightType = SInt(8.W),
+    spatialArrayOutputType = SInt(20.W),
+    
+    meshRows = 4,
+    meshColumns = 4,
+    tileRows = 1,
+    tileColumns = 1,
+    
+    dataflow = Dataflow.WS,
+    
+    sp_capacity = CapacityInKilobytes(64),
+    acc_capacity = CapacityInKilobytes(16),
+    
+    has_training_convs = false,
+  )
+
   // Specify which of your custom configs you want to build here
   //val customConfig = unifiedMemConfig
   //val customConfig = GemminiFPConfigs.FP16DefaultConfig
