@@ -1,146 +1,145 @@
 # Custom Integer Multiplier for Gemmini
 
-## Quick Start (All You Need to Know)
+## Gemmini's INT8 Constraint
 
-### Step 1: Edit SimpleMul.scala
-Open `SimpleMul.scala` and modify the single line to your custom multiplier design:
+Gemmini's architecture **requires a minimum of 8-bit data types** for integers. The memory
+interface, scratchpad banks, and DMA all compute byte counts and alignment using:
+
+```scala
+val sp_width = meshColumns * tileColumns * inputType.getWidth
+val sp_bank_entries = kb * 1024 * 8 / (sp_banks * sp_width)
+```
+
+Setting `inputType = SInt(4.W)` or `SInt(7.W)` causes `getWidth / 8 = 0` (integer
+division), which triggers a **divide-by-zero crash** during Chisel elaboration. This is a
+fundamental constraint — not a bug.
+
+**Bottom line:** `inputType`, `weightType`, and all spatial array types must be `SInt(8.W)`
+or wider (multiples of 8: 8, 16, 32).
+
+---
+
+## How Reduced Precision Works (INT4, INT6, etc.)
+
+Since we cannot change the 8-bit data containers, we handle reduced precision **entirely
+inside the multiplier module**:
+
+```
+Gemmini scratchpad (8-bit)
+  → PE data path (8-bit)
+  → Multiplier IO (8-bit input, 16-bit output)
+      ┌─────────────────────────────────┐
+      │ truncate 8-bit → N-bit          │  ← done inside SimpleMul
+      │ multiply at N-bit precision     │
+      │ sign-extend product → 16-bit    │
+      └─────────────────────────────────┘
+  → Accumulator (32-bit)
+```
+
+No Gemmini core files are modified. All precision control lives in `SimpleMul.scala`.
+
+---
+
+## Quick Start
+
+### Step 1: Set precision in SimpleMul.scala
 
 ```scala
 class SimpleMul(bitWidth: Int) extends IntMultiplier(bitWidth) {
-  // Replace this line with your multiplier:
-  io.result := io.a * io.b
+  val mulPrecision = 4  // ← Change this: 4 for INT4, 6 for INT6, bitWidth for INT8
+
+  if (mulPrecision >= bitWidth) {
+    io.result := io.a * io.b
+  } else {
+    val a_trunc = truncate(io.a, mulPrecision)  // or clip() for saturation
+    val b_trunc = truncate(io.b, mulPrecision)
+    val product = a_trunc * b_trunc
+    io.result := signExtendProduct(product, 2 * mulPrecision)
+  }
 }
 ```
 
-**Examples:**
-- Standard multiply: `io.result := io.a * io.b`
-- With offset: `io.result := (io.a * io.b) + 2.S`
-- Custom logic: `io.result := custom_mul_function(io.a, io.b)`
+### Step 2: Recompile
 
-### Step 2: Set Bitwidth in CustomConfigs.scala
-
-```scala
-// In CustomConfigs.scala, uncomment the bitwidth you want:
-val customConfig = int8Config   // 8-bit (default)
-// val customConfig = int4Config // 4-bit
-// val customConfig = int6Config // 6-bit
-// val customConfig = int16Config // 16-bit
-```
-
-### Step 3: Recompile
 ```bash
 cd sims/verilator
-make CONFIG=GemminiRocketCustomConfig
+make CONFIG=GemminiRocketConfigHansa
 ```
-
-That's it! Your custom multiplier flows through the entire system automatically.
 
 ---
 
-## How It Works (Technical Overview)
+## For Precision > 8 Bits (INT16, INT32)
 
-The bitwidth parameter is passed through the config hierarchy:
-```
-CustomConfigs.scala (sIntMulBitWidth = 8)
-  ↓
-GemminiArrayConfig → ExecuteController → Mesh → Tile → PE → MacUnit
-  ↓
-SimpleMul(bitWidth=8)
-  ↓
-io.result := your_custom_multiplier_logic
-```
-
-**The Multiplier Interface:**
-- **Inputs:** `io.a, io.b` — both `SInt(bitWidth.W)`
-- **Output:** `io.result` — `SInt(2*bitWidth.W)` (standard for multiplier)
-
-The output width is automatically 2× the input width because that's how signed multiply works (2 inputs of width `w` → output of width `2w`).
-
----
-
-## Available Configs
-
-| Config | Bitwidth | Use Case |
-|--------|----------|----------|
-| `int4Config` | 4-bit | Low precision, mobile |
-| `int6Config` | 6-bit | Medium precision |
-| `int8Config` | 8-bit | Standard (default) |
-| `int16Config` | 16-bit | High precision |
-
----
-
-## Example: Testing Your Design
-
-If you implement a custom multiplier in SimpleMul.scala:
+If you need precisions **wider** than 8 bits, you must change the Gemmini data types in
+`CustomConfigs.scala` to match:
 
 ```scala
-// SimpleMul.scala - Custom Design
-class SimpleMul(bitWidth: Int) extends IntMultiplier(bitWidth) {
-  // Your optimized multiplier (e.g., Booth encoding, Wallace tree, etc.)
-  io.result := my_custom_multiply(io.a, io.b)
-}
+val int16Config = defaultConfig.copy(
+  inputType = SInt(16.W),
+  weightType = SInt(16.W),
+  accType = SInt(32.W),
+  spatialArrayInputType = SInt(16.W),
+  spatialArrayWeightType = SInt(16.W),
+  spatialArrayOutputType = SInt(32.W),
+  // ... other params
+)
 ```
 
-Then set config and compile:
-```scala
-// CustomConfigs.scala
-val customConfig = int8Config  // Uses your SimpleMul at 8-bit width
-```
-
-Your design is now integrated into the Gemmini systolic array!
+Type widths **must** be multiples of 8 (8, 16, 32) for byte alignment.
+Then set `mulPrecision = bitWidth` in `SimpleMul.scala` (full-width multiply).
 
 ---
 
-## Testing Your Multiplier
+## Helper Methods (IntMultiplier base class)
 
-### Method 1: Run Existing Tests
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `truncate` | `truncate(x: SInt, n: Int): SInt` | Bit-slice lower n bits. Zero extra HW. Wraps on overflow. |
+| `clip` | `clip(x: SInt, n: Int): SInt` | Saturate to n-bit signed range. Adds comparators + muxes. |
+| `signExtendProduct` | `signExtendProduct(product: SInt, productWidth: Int): SInt` | Sign-extend narrow product to full 16-bit output width. |
+
+**When to use which:**
+- `truncate`: Your software already quantizes values to fit in n bits (fast, no extra HW)
+- `clip`: You want hardware safety — out-of-range values are clamped (slower, more area)
+
+---
+
+## Note on `sIntMulBitWidth` Config Parameter
+
+The `sIntMulBitWidth` parameter in `CustomConfigs.scala` flows through the config hierarchy
+to `MacUnit`, but **does not actually control the multiplier bitwidth**. Due to how Scala
+implicit resolution works in `Arithmetic.scala`, the multiplier is always instantiated with
+`bitWidth = 8` (the Gemmini data path width).
+
+The actual precision control is the `mulPrecision` value inside `SimpleMul.scala`.
+
+---
+
+## Example Multipliers in This Directory
+
+| File | Purpose |
+|------|---------|
+| `SimpleMul.scala` | **The file you edit.** Your custom multiplier goes here. |
+| `FourBitMul.scala` | Reference INT4 implementation using truncate + sign-extend. |
+| `DummyMul.scala` | Adds +1 to result. For verifying the multiplier is active. |
+| `Add2Mul.scala` | Adds +2 to result. Another verification example. |
+
+---
+
+## Testing
+
+Add a known offset to verify your multiplier is being used:
+
+```scala
+// Temporary — remove after verification
+io.result := signExtendProduct(product, 2 * mulPrecision) + 1.S
+```
+
+Run a matmul test. If every output element is off by exactly the expected offset, your
+custom multiplier is correctly integrated.
+
 ```bash
 cd sims/verilator
-./simulator-chipyard.harness-GemminiRocketCustomConfig \
+./simulator-chipyard.harness-TestHarness-GemminiRocketConfigHansa \
   ../../generators/gemmini/software/gemmini-rocc-tests/build/bareMetalC/matmul_print-baremetal
 ```
-
-### Method 2: Verify Output (Check SimpleMul is Active)
-
-Edit SimpleMul.scala temporarily to add a known offset:
-```scala
-class SimpleMul(bitWidth: Int) extends IntMultiplier(bitWidth) {
-  io.result := (io.a * io.b) + 1.S  // Temporary test: add 1
-}
-```
-
-If output values are 1 higher than expected, SimpleMul is being used correctly. Remove the `+ 1.S` when done.
-
----
-
-## No Need to Worry About:
-- ❌ `sIntMulVariant` — defaults to "Simple" automatically
-- ❌ Implicit parameters — handled internally
-- ❌ Width conversion — automatic promotion to 32-bit accumulator
-- ❌ Module instantiation — done automatically by factory function
-
-Just edit SimpleMul.scala and set the bitwidth!
-
----
-
-## For Testing/Verification (Optional)
-
-Example test multipliers in this directory:
-- `DummyMul.scala` — adds +1 to result (for verification)
-- `Add2Mul.scala` — adds +2 to result (for verification)
-- `FourBitMul.scala` — reference 4-bit multiplier implementation
-
-These are NOT for production. They show how to create variants if needed.
-
----
-
-## Troubleshooting
-
-**Q: My custom multiplier isn't being used?**
-- A: Check that SimpleMul.scala is saved and recompile.
-
-**Q: Bitwidth mismatch errors?**
-- A: Make sure `sIntMulBitWidth` in CustomConfigs matches your multiplier's design assumptions.
-
-**Q: Need to test multiple bitwidths?**
-- A: Create configs in CustomConfigs.scala (int4Config, int8Config, etc.) and uncomment the one you want to test.

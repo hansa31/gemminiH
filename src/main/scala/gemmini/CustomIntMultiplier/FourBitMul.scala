@@ -1,17 +1,20 @@
 // ============================================================================
-// 4-BIT INTEGER MULTIPLIER - Test Case Implementation
+// 4-BIT INTEGER MULTIPLIER — Reference Implementation
 // ============================================================================
-// This is a reference 4-bit signed multiplier using Booth encoding.
-// 
-// USAGE FOR TESTING:
-// 1. Replace SimpleMul.scala content with this file's content
-// 2. Set sIntMulBitWidth = 4 in CustomConfigs.scala
-// 3. Recompile and run test
-// 4. Compare results against 8-bit baseline
+// Demonstrates INT4 multiplication inside an 8-bit Gemmini data path.
 //
-// Expected behavior with 4-bit input:
-// - Input range: -8 to +7 (4-bit signed)
-// - Output range: -64 to +63 (8-bit signed, 4*2 bits)
+// Data flow:
+//   8-bit input → truncate to 4-bit → 4-bit × 4-bit = 8-bit product
+//   → sign-extend to 16-bit output
+//
+// To USE this multiplier instead of SimpleMul:
+//   Option A: Copy the logic below into SimpleMul.scala
+//   Option B: Add a "fourbit" case to the factory in Arithmetic.scala
+//             (requires editing Gemmini core)
+//
+// Input range (4-bit signed): -8 to +7
+// Product range:              -56 to +64  (8-bit signed)
+// Output:                     sign-extended to 16-bit
 // ============================================================================
 
 package gemmini
@@ -20,15 +23,15 @@ import chisel3._
 import chisel3.util._
 
 class FourBitMul(bitWidth: Int) extends IntMultiplier(bitWidth) {
-  require(bitWidth == 4, "FourBitMul is optimized for 4-bit inputs only")
-  
-  // Booth-encoded 4-bit multiplier
-  // For demonstration: uses standard multiply with verification
-  // In production, this could use optimized partial product array
-  
-  io.result := io.a * io.b
-  
-  // Optional: Add debug assertion for range checking
-  // assert(io.a >= -8.S && io.a <= 7.S, "4-bit multiplier input out of range")
-  // assert(io.b >= -8.S && io.b <= 7.S, "4-bit multiplier input out of range")
+  val mulPrecision = 4
+
+  // Truncate 8-bit inputs to 4-bit (assumes values are pre-quantized to fit)
+  val a_trunc = truncate(io.a, mulPrecision)
+  val b_trunc = truncate(io.b, mulPrecision)
+
+  // 4-bit × 4-bit signed multiplication → 8-bit product
+  val product = a_trunc * b_trunc
+
+  // Sign-extend 8-bit product to 16-bit output
+  io.result := signExtendProduct(product, 2 * mulPrecision)
 }
