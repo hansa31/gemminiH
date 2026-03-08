@@ -81,6 +81,33 @@ object GemminiCustomConfigs {
     has_training_convs = false,
   )
 
+  // Small FP32 config optimized for MobileNet with WS dataflow
+  val smallFloatGemmini = defaultFpConfig.copy(
+    inputType = Float(8, 24),
+    weightType = Float(8, 24),
+    accType = Float(8, 24),
+    spatialArrayInputType = Float(8, 24),
+    spatialArrayWeightType = Float(8, 24),
+    spatialArrayOutputType = Float(8, 24),
+    
+    meshRows = 4,
+    meshColumns = 4,
+    tileRows = 1,
+    tileColumns = 1,
+    
+    dataflow = Dataflow.WS,
+    
+    sp_capacity = CapacityInKilobytes(64),
+    acc_capacity = CapacityInKilobytes(16),
+    
+    tile_latency = 2,
+    
+    has_training_convs = false,
+  )
+
+  //simple gemmini config to copy for custom float multiplier testing
+
+
   val smallGemminiV = defaultConfig.copy(
     inputType = SInt(8.W),
     weightType = SInt(8.W),
@@ -137,7 +164,9 @@ object GemminiCustomConfigs {
   // val customConfig = int4Config
   // val customConfig = int6Config
   // val customConfig = int16Config
-  val customConfig = smallGemminiV
+  //val customConfig = smallFloatGemmini
+  val customConfig = smallGemmini
+
 
 
 }

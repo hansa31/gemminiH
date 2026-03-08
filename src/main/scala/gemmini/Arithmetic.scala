@@ -383,40 +383,81 @@ object Arithmetic {
 
       
       override def mac(m1: Float, m2: Float): Float = {
-        // Recode all operands
-        val m1_rec = if (m1.isRecoded) m1.bits else recFNFromFN(m1.expWidth, m1.sigWidth, m1.bits)
-        val m2_rec = if (m2.isRecoded) m2.bits else recFNFromFN(m2.expWidth, m2.sigWidth, m2.bits)
-        val self_rec = if (self.isRecoded) self.bits else recFNFromFN(self.expWidth, self.sigWidth, self.bits)
+        // Check configuration from SimpleFloatMulConfig
+        if (SimpleFloatMulConfig.useHardfloat) {
+          // === HARDFLOAT PATH: Use fused MulAddRecFN (exact, efficient) ===
+          
+          // Recode all operands
+          val m1_rec = if (m1.isRecoded) m1.bits else recFNFromFN(m1.expWidth, m1.sigWidth, m1.bits)
+          val m2_rec = if (m2.isRecoded) m2.bits else recFNFromFN(m2.expWidth, m2.sigWidth, m2.bits)
+          val self_rec = if (self.isRecoded) self.bits else recFNFromFN(self.expWidth, self.sigWidth, self.bits)
 
-        // Resize m1 to self's width
-        val m1_resizer = Module(new RecFNToRecFN(m1.expWidth, m1.sigWidth, self.expWidth, self.sigWidth))
-        m1_resizer.io.in := m1_rec
-        m1_resizer.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
-        m1_resizer.io.detectTininess := consts.tininess_afterRounding
-        val m1_rec_resized = m1_resizer.io.out
+          // Resize m1 to self's width
+          val m1_resizer = Module(new RecFNToRecFN(m1.expWidth, m1.sigWidth, self.expWidth, self.sigWidth))
+          m1_resizer.io.in := m1_rec
+          m1_resizer.io.roundingMode := consts.round_near_even
+          m1_resizer.io.detectTininess := consts.tininess_afterRounding
+          val m1_rec_resized = m1_resizer.io.out
 
-        // Resize m2 to self's width
-        val m2_resizer = Module(new RecFNToRecFN(m2.expWidth, m2.sigWidth, self.expWidth, self.sigWidth))
-        m2_resizer.io.in := m2_rec
-        m2_resizer.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
-        m2_resizer.io.detectTininess := consts.tininess_afterRounding
-        val m2_rec_resized = m2_resizer.io.out
+          // Resize m2 to self's width
+          val m2_resizer = Module(new RecFNToRecFN(m2.expWidth, m2.sigWidth, self.expWidth, self.sigWidth))
+          m2_resizer.io.in := m2_rec
+          m2_resizer.io.roundingMode := consts.round_near_even
+          m2_resizer.io.detectTininess := consts.tininess_afterRounding
+          val m2_rec_resized = m2_resizer.io.out
 
-        // Perform multiply-add
-        val muladder = Module(new MulAddRecFN(self.expWidth, self.sigWidth))
+          // Perform fused multiply-add
+          val muladder = Module(new MulAddRecFN(self.expWidth, self.sigWidth))
+          muladder.io.op := 0.U
+          muladder.io.roundingMode := consts.round_near_even
+          muladder.io.detectTininess := consts.tininess_afterRounding
+          muladder.io.a := m1_rec_resized
+          muladder.io.b := m2_rec_resized
+          muladder.io.c := self_rec
 
-        muladder.io.op := 0.U
-        muladder.io.roundingMode := consts.round_near_even // consts.round_near_maxMag
-        muladder.io.detectTininess := consts.tininess_afterRounding
-
-        muladder.io.a := m1_rec_resized
-        muladder.io.b := m2_rec_resized
-        muladder.io.c := self_rec
-
-        // Convert result to standard format // TODO remove these intermediate recodings
-        val out = Wire(Float(self.expWidth, self.sigWidth, self.isRecoded))
-        out.bits := (if (out.isRecoded) muladder.io.out else fNFromRecFN(self.expWidth, self.sigWidth, muladder.io.out))
-        out
+          // Convert result to standard format
+          val out = Wire(Float(self.expWidth, self.sigWidth, self.isRecoded))
+          out.bits := (if (out.isRecoded) muladder.io.out else fNFromRecFN(self.expWidth, self.sigWidth, muladder.io.out))
+          out
+          
+        } else {
+          // === CUSTOM MULTIPLIER PATH: Use SimpleFloatMul + AddRecFN ===
+          
+          // Instantiate the custom floating-point multiplier
+          val customMul = Module(new SimpleFloatMul(m1.expWidth, m1.sigWidth))
+          customMul.io.a := m1.bits
+          customMul.io.b := m2.bits
+          
+          // Get multiplication result as a Float
+          val mulResult = Wire(Float(m1.expWidth, m1.sigWidth))
+          mulResult.bits := customMul.io.o
+          
+          // Convert multiplication result to recoded format
+          val mulResult_rec = recFNFromFN(m1.expWidth, m1.sigWidth, mulResult.bits)
+          
+          // Convert self (accumulator) to recoded format
+          val self_rec = if (self.isRecoded) self.bits else recFNFromFN(self.expWidth, self.sigWidth, self.bits)
+          
+          // Resize multiplication result to accumulator width
+          val mulResult_resizer = Module(new RecFNToRecFN(m1.expWidth, m1.sigWidth, self.expWidth, self.sigWidth))
+          mulResult_resizer.io.in := mulResult_rec
+          mulResult_resizer.io.roundingMode := consts.round_near_even
+          mulResult_resizer.io.detectTininess := consts.tininess_afterRounding
+          val mulResult_rec_resized = mulResult_resizer.io.out
+          
+          // Add multiplication result to accumulator using hardfloat AddRecFN
+          val fpAdder = Module(new AddRecFN(self.expWidth, self.sigWidth))
+          fpAdder.io.a := mulResult_rec_resized
+          fpAdder.io.b := self_rec
+          fpAdder.io.roundingMode := consts.round_near_even
+          fpAdder.io.detectTininess := consts.tininess_afterRounding
+          fpAdder.io.subOp := false.B
+          
+          // Convert result back to standard format
+          val out = Wire(Float(self.expWidth, self.sigWidth, self.isRecoded))
+          out.bits := (if (out.isRecoded) fpAdder.io.out else fNFromRecFN(self.expWidth, self.sigWidth, fpAdder.io.out))
+          out
+        }
       }
 
       /*
