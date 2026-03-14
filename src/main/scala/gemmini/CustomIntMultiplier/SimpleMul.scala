@@ -36,7 +36,7 @@ class SimpleMul(bitWidth: Int) extends IntMultiplier(bitWidth) {
   // CHOOSE YOUR MULTIPLIER MODE
   // ===========================
   val useVerilog  = true       // Set to true to use Verilog BlackBox (VerilogMul.v)
-  val mulPrecision = 4   // Change to 4 for INT4, 6 for INT6, etc. (works in BOTH modes)
+  val mulPrecision = 8   // Change to 4 for INT4, 6 for INT6, etc. (works in BOTH modes)
 
   if (useVerilog) {
     // ---- Option B: Verilog BlackBox multiplier ----
