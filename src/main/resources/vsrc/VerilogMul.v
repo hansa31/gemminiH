@@ -23,7 +23,7 @@
 
 module VerilogMul #(
   parameter WIDTH     = 8,
-  parameter PRECISION = 4   // Set to 4 for INT4, 6 for INT6, etc.
+  parameter PRECISION = 8   // Set to 4 for INT4, 6 for INT6, etc.
 )(
   input  signed [WIDTH-1:0]     a,
   input  signed [WIDTH-1:0]     b,
