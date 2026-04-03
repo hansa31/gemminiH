@@ -14,6 +14,92 @@ This document is intended to provide information for beginners wanting to try ou
 
 ![Gemmini's high-level architecture](./img/gemmini-system.png)
 
+---
+
+AxSCOPE Extensions
+==================
+
+This fork is the hardware component of **AxSCOPE**, a full-stack approximate computing evaluation platform built on top of Gemmini. The key contribution is a pluggable custom multiplier framework that lets users drop in any approximate multiplier — at any integer or floating-point precision — into the Gemmini systolic array, without modifying the core Gemmini RTL.
+
+The benchmark software counterpart is in `software/gemmini-rocc-tests` (see its README for the full-dataset inference benchmarks for ResNet-50, MobileNetV2, and BERT-Tiny).
+
+### What Was Added
+
+Two parallel multiplier plug-in points were added to the systolic array, one for integer datapaths and one for floating-point datapaths. Both hook into `Arithmetic.scala` at the `mac` operation inside every processing element (PE).
+
+---
+
+### Integer Multiplier (`src/main/scala/gemmini/CustomIntMultiplier/`)
+
+| File | Purpose |
+|------|---------|
+| `IntMultiplier.scala` | Abstract base class. Defines the IO contract: `SInt(8.W)` × `SInt(8.W)` → `SInt(16.W)`. Provides `truncate`, `clip`, and `signExtendProduct` helpers for subclasses. |
+| `SimpleMul.scala` | **User entry point.** Edit `useVerilog` and `mulPrecision` here to change multiply behavior. |
+| `VerilogMul.scala` | Chisel `BlackBox` wrapper that instantiates `src/main/resources/vsrc/VerilogMul.v` with `WIDTH` and `PRECISION` parameters. |
+| `FourBitMul.scala` | Reference INT4 implementation: truncates inputs to 4 bits, multiplies, sign-extends. |
+| `DummyMul.scala`, `Add2Mul.scala` | Test stubs that add a known offset to the exact result, used to verify the multiplier is active in the datapath. |
+
+**To change integer multiply precision or implementation, edit `SimpleMul.scala`:**
+
+```scala
+class SimpleMul(bitWidth: Int) extends IntMultiplier(bitWidth) {
+  val useVerilog   = true   // true → delegates to VerilogMul.v; false → inline Chisel
+  val mulPrecision = 8      // effective multiply precision: 2, 4, 6, or 8
+  ...
+}
+```
+
+- `mulPrecision < bitWidth`: inputs are truncated to `mulPrecision` bits before multiplying. No retraining required if weights are pre-quantized in software.
+- `useVerilog = true`: the `PRECISION` parameter is forwarded to `VerilogMul.v`. The Verilog module can be swapped with any technology-mapped netlist (e.g., from EvoApproxLib).
+
+**EvoApproxLib support:** `src/main/resources/vsrc/8x8_signed/` contains a library of Pareto-optimal approximate 8×8 signed multiplier netlists from the [EvoApproxLib](https://ehw.fit.vutbr.cz/evoapproxlib/) project, organized across five error metrics (MAE, MRE, MSE, WCE, EP) in both standard and PDK45 technology-mapped variants. Any of these can be dropped into `VerilogMul.v` as a replacement multiply core.
+
+---
+
+### Floating-Point Multiplier (`src/main/scala/gemmini/CustomFloatMultiplier/`)
+
+| File | Purpose |
+|------|---------|
+| `FloatMultiplier.scala` | Abstract base class. IO is raw IEEE 754 bits as `UInt(width.W)`. Parameterized by `expWidth` and `sigWidth`, supporting FP32, FP16, and BF16. |
+| `SimpleFloatMul.scala` | **User entry point.** The `SimpleFloatMulConfig` object controls which multiply implementation is active at elaboration time. |
+| `MBMFloatMul.scala` | Adapter to the Mitchell's Bit Manipulation (MBM) approximate FP multiplier. |
+| `FPMultSinglePrecisionMBMnoReg.scala` | Full Chisel implementation of Mitchell's logarithm-based approximate multiply with remainder-error correction. Full IEEE 754 exception handling (zero, inf, NaN). Parameterized by format and `k` (log precision). |
+| `DummyFloatMul.scala` | Test stub that passes the exponent/mantissa of `a` through unchanged while XORing sign bits. |
+
+**To switch between exact and approximate FP multiply, edit `SimpleFloatMulConfig` in `SimpleFloatMul.scala`:**
+
+```scala
+object SimpleFloatMulConfig {
+  val useHardfloat: Boolean = true   // true → exact IEEE 754 via hardfloat MulAddRecFN
+                                     // false → use custom multiplier below
+  val useMBM:       Boolean = false  // false → DummyFloatMul; true → Mitchell approximate
+  val expWidth:     Int     = 5      // FP16 exponent width
+  val sigWidth:     Int     = 11     // FP16 significand (incl. hidden bit)
+  val k:            Int     = 11     // Mitchell log precision parameter
+}
+```
+
+- `useHardfloat = true`: the multiplication uses hardfloat's fused `MulAddRecFN` — fully IEEE 754 compliant, no approximation.
+- `useHardfloat = false, useMBM = true`: Mitchell's algorithm is used for the multiply. The key approximation is `log2(A × B) ≈ log2(A) + log2(B)`, computed from the mantissa's leading-one position rather than a conventional multiplier. Accumulation always uses hardfloat's exact `AddRecFN`.
+- `k` controls how many mantissa bits enter the log domain. `k = sigWidth` gives the best MBM accuracy; lower `k` reduces hardware at the cost of more approximation error.
+
+---
+
+### How It Wires In
+
+Both multipliers are instantiated inside `Arithmetic.scala` at the `mac` operation, which is called by every PE in the systolic array:
+
+```
+PE → MacUnit → Arithmetic.mac
+                 ├── SIntArithmetic.mac  → createSIntMultiplier() → SimpleMul (or variant)
+                 └── FloatArithmetic.mac → if useHardfloat: MulAddRecFN
+                                           else:            SimpleFloatMul → MBMFloatMul
+```
+
+No changes to `Mesh.scala`, `Tile.scala`, or `PE.scala` are needed to swap multipliers — only the two user entry-point files need to be edited.
+
+---
+
 Quick Start
 ==========
 
