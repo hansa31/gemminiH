@@ -217,87 +217,90 @@ lowered to GEMM, compared to MobileNetV2's mostly 1×1 pointwise convolutions.
 
 ## Validation Against FPGA Results (CIFAR-10)
 
-Measured top-1 accuracy on Genesys2 (Gemmini INT8, ~35 kHz, 500 images) from
-`RESULTS.md`. All 10 multipliers with complete CIFAR-10 results are compared
-against metric rank (ascending E[‖E‖²_F] = lower distortion = better).
+Measured top-1 and top-5 accuracy on Genesys2 (Gemmini INT8, ~35 kHz,
+500 images) from `RESULTS.md`. All 10 multipliers with complete CIFAR-10
+results are compared against metric rank (ascending E[‖E‖²_F] = better).
 `mul8s_1L2J` is excluded (run incomplete).
 
-Random-chance baseline = 10% (10 classes).
+Random-chance baseline: Top-1 = 10%, Top-5 = 50% (10 classes).
 
 ### ResNet-50 CIFAR-10
 
 Rows ordered by ascending metric (best → worst predicted).
 
-| Metric rank | Multiplier    | E[‖E‖²_F] (ResNet) | Measured Top-1 | Accuracy rank |
-|:-----------:|---------------|-------------------:|:--------------:|:-------------:|
-| 1           | `mul8s_1KV6`  | 0.00e+00           | **91.80%**     | 1             |
-| 2           | `mul8s_1KV8`  | 1.04e+13           | 90.20%         | 3             |
-| 3           | `mul8s_1KVM`  | 1.46e+13           | 91.00%         | 2             |
-| 4           | `mul8s_1KVP`  | 4.78e+13           | 69.60%         | 4             |
-| 5           | `mul8s_1KV9`  | 1.20e+14           | 39.20%         | 5             |
-| 6           | `mul8s_1KVQ`  | 4.66e+14           | 22.80%         | 6             |
-| 7           | `mul8s_1KXF`  | 5.16e+14           | 15.60%         | 7             |
-| 8           | `mul8s_1KVA`  | 9.95e+14           | 11.40%         | 8 (tie)       |
-| 9           | `mul8s_1KX5`  | 1.85e+15           | 11.40%         | 8 (tie)       |
-| 10          | `mul8s_1L12`  | 3.95e+16           | 11.40%         | 8 (tie)       |
+| Metric rank | Multiplier    | E[‖E‖²_F] (ResNet) | Top-1  | Top-5  |
+|:-----------:|---------------|-------------------:|:------:|:------:|
+| 1           | `mul8s_1KV6`  | 0.00e+00           | **91.80%** | 99.60% |
+| 2           | `mul8s_1KV8`  | 1.04e+13           | 90.20% | 99.60% |
+| 3           | `mul8s_1KVM`  | 1.46e+13           | 91.00% | **99.80%** |
+| 4           | `mul8s_1KVP`  | 4.78e+13           | 69.60% | 96.60% |
+| 5           | `mul8s_1KV9`  | 1.20e+14           | 39.20% | 76.60% |
+| 6           | `mul8s_1KVQ`  | 4.66e+14           | 22.80% | 50.60% |
+| 7           | `mul8s_1KXF`  | 5.16e+14           | 15.60% | **76.00%** |
+| 8           | `mul8s_1KVA`  | 9.95e+14           | 11.40% | 50.60% |
+| 9           | `mul8s_1KX5`  | 1.85e+15           | 11.40% | 50.60% |
+| 10          | `mul8s_1L12`  | 3.95e+16           | 11.40% | 47.60% |
 
-**Match: excellent across all 10.** The only rank inversion is positions 2/3
-(`mul8s_1KV8` vs `mul8s_1KVM`), where both metric values (factor 1.4×) and
-accuracy (0.8 pp) are within measurement noise at 500 images. Positions 4–7
-are a perfect monotone match with large accuracy gaps. Positions 8–10 all
-collapse to 11.40% (near-random) — the metric correctly predicts all three
-will fail but cannot distinguish them once inference is at chance level.
+**Top-1 match: excellent.** Only the rank-2/3 swap (1KV8 vs 1KVM, 0.8 pp
+gap) is within noise; all other positions are monotone. Ranks 8–10 collapse
+to 11.40% (near Top-1 random).
+
+**Top-5 reveals a second anomaly.** `mul8s_1KXF` (metric rank 7) achieves
+76.00% Top-5 — jumping past metric-rank-6 `mul8s_1KVQ` (50.60%, barely
+above the 50% random baseline). The same near-zero-bias cancellation that
+drives 1KXF's MobileNet Top-1 anomaly is present here in Top-5 on ResNet.
+At Top-1 the effect is masked (15.60% vs 22.80% is only ~7 pp), but at
+Top-5 the spread is 25 pp. Ranks 8–10 at 50.60% / 50.60% / 47.60% are all
+at or below the Top-5 random baseline — the metric correctly predicts all
+three are failed.
 
 ### MobileNet CIFAR-10
 
 Rows ordered by ascending metric (best → worst predicted).
 
-| Metric rank | Multiplier    | E[‖E‖²_F] (MobileNet) | Measured Top-1 | Accuracy rank |
-|:-----------:|---------------|----------------------:|:--------------:|:-------------:|
-| 1           | `mul8s_1KV6`  | 0.00e+00              | **26.60%**     | 1             |
-| 2           | `mul8s_1KV8`  | 4.62e+11              | 19.00%         | 3 (tie)       |
-| 3           | `mul8s_1KVM`  | 3.06e+12              | 26.20%         | 2             |
-| 4           | `mul8s_1KVP`  | 4.55e+12              | 12.60%         | 5             |
-| 5           | `mul8s_1KV9`  | 5.34e+12              | 12.20%         | 6             |
-| 6           | `mul8s_1KVQ`  | 2.32e+13              | 9.80%          | 8 (tie)       |
-| 7           | `mul8s_1KVA`  | 4.43e+13              | 9.80%          | 8 (tie)       |
-| 8           | `mul8s_1KX5`  | 9.94e+13              | 9.80%          | 8 (tie)       |
-| 9           | `mul8s_1KXF`  | 1.07e+14              | 19.00%         | 3 (tie)       |
-| 10          | `mul8s_1L12`  | 8.19e+15              | 11.40%         | 7             |
+| Metric rank | Multiplier    | E[‖E‖²_F] (MobileNet) | Top-1  | Top-5  |
+|:-----------:|---------------|----------------------:|:------:|:------:|
+| 1           | `mul8s_1KV6`  | 0.00e+00              | **26.60%** | 78.40% |
+| 2           | `mul8s_1KV8`  | 4.62e+11              | 19.00% | 75.60% |
+| 3           | `mul8s_1KVM`  | 3.06e+12              | 26.20% | **79.60%** |
+| 4           | `mul8s_1KVP`  | 4.55e+12              | 12.60% | 65.40% |
+| 5           | `mul8s_1KV9`  | 5.34e+12              | 12.20% | 55.60% |
+| 6           | `mul8s_1KVQ`  | 2.32e+13              | 9.80%  | 47.80% |
+| 7           | `mul8s_1KVA`  | 4.43e+13              | 9.80%  | 47.40% |
+| 8           | `mul8s_1KX5`  | 9.94e+13              | 9.80%  | 45.00% |
+| 9           | `mul8s_1KXF`  | 1.07e+14              | 19.00% | **53.00%** |
+| 10          | `mul8s_1L12`  | 8.19e+15              | 11.40% | 47.60% |
 
-**Match: good for the top half; two anomalies in the bottom half.**
+**Top-1 match: good for the top half; 1KXF is the main anomaly** (metric
+rank 9 → actual rank 3 tie). The bottom half correctly collapses to
+near-random.
 
-- `mul8s_1KXF` (metric rank 9) ties for 3rd in actual accuracy. Its μ = +1.75
-  is near-zero, so errors are nearly iid zero-mean. In MobileNet's shallow
-  pointwise layers (K ≤ 960) partial cancellation reduces the effective
-  distortion well below what the first-order additive model predicts. On
-  ResNet (K ≤ 4608) the same multiplier correctly sits at rank 7 — larger K
-  suppresses cancellation via the law of large numbers.
-
-- `mul8s_1L12` (metric rank 10) measures 11.40%, narrowly above the
-  three-way tie at 9.80% (ranks 6–8). Both values are near the 10% random
-  baseline at 500 images, so this difference (7 images out of 500) is within
-  measurement noise and should not be interpreted as a meaningful inversion.
+**Top-5 reinforces the 1KXF anomaly.** At 53.00% Top-5 it is the only
+multiplier in the bottom half that clears the 50% random baseline, while
+metric-rank-6 `mul8s_1KVQ` drops to 47.80% (below random). Ranks 6–8 and
+10 all sit at 45–48%, confirming near-random performance consistent with
+their high metric values.
 
 ### Key takeaways
 
-1. **Bias-dominated multipliers obey the metric reliably across all 10 ranks.**
-   Whenever |μ| ≫ σ/√m the accumulated error is systematic and non-cancelling.
-   ResNet shows a perfect monotone match for all distinguishable positions.
-   MobileNet matches for ranks 1–5 and correctly predicts collapse for ranks
-   6–10 (all fall to ≤12.6%, near chance).
+1. **Bias-dominated multipliers obey the metric reliably across all 10
+   ranks and both Top-k metrics.** Whenever |μ| ≫ σ/√m the accumulated
+   error is systematic and non-cancelling. ResNet is monotone for all
+   distinguishable Top-1 positions. MobileNet matches for ranks 1–5 (both
+   Top-1 and Top-5) and correctly predicts collapse for ranks 6–10.
 
-2. **High-variance / near-zero-bias multipliers can overperform the metric.**
-   `mul8s_1KXF` (μ = +1.75, σ² = 95 573) is the clearest example: the metric
-   places it last among non-exact multipliers on MobileNet, yet it ties for
-   3rd. The first-order iid model does not account for error cancellation
-   across the K accumulation dimension when bias is small. This gap is
-   network-depth-dependent — it disappears on ResNet where larger K drives
-   the sample mean of errors toward the true mean.
+2. **`mul8s_1KXF` consistently overperforms — visible in both Top-1 and
+   Top-5, on both networks.** It jumps from metric rank 9 to Top-1 rank 3
+   on MobileNet, and from metric rank 7 to an effective Top-5 rank 5 on
+   ResNet (76.00% vs 50.60% for the metric-adjacent 1KVQ). The root cause
+   is its near-zero bias (μ = +1.75): zero-mean errors partially cancel
+   across the K accumulation dimension in a way the first-order iid model
+   does not capture. Top-5 exposes this more clearly than Top-1 because
+   partial correctness is credited.
 
-3. **The metric correctly identifies the accuracy cliff.** No multiplier ranked
-   low by the metric achieved unexpectedly high accuracy, and no high-ranked
-   multiplier collapsed. The boundary between "working" (≥12%) and "failed"
-   (≤10%, near-random) is perfectly predicted. Over-prediction of distortion
-   occurs only for high-variance cases and causes a conservative (safe) error,
-   not a dangerous one.
+3. **The metric correctly identifies the accuracy cliff.** No high-ranked
+   multiplier collapsed, and no low-ranked multiplier achieved strong
+   accuracy. The boundary between working and failed multipliers is
+   correctly predicted. Over-prediction of distortion occurs only for
+   high-variance/near-zero-bias cases and is conservative (safe), not
+   dangerous.
