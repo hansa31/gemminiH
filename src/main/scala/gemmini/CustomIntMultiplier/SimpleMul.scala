@@ -18,9 +18,9 @@
 //
 // Precision examples (Chisel mode only):
 //   val mulPrecision = bitWidth  // Full 8-bit multiply (default Gemmini)
-//   val mulPrecision = 4         // INT4: inputs truncated to [-8, +7]
+//   val mulPrecision = 6         // INT4: inputs truncated to [-8, +7]
 //   val mulPrecision = 6         // INT6: inputs truncated to [-32, +31]
-//   val mulPrecision = 2         // INT2: inputs truncated to [-2, +1]
+//   val mulPrecision = 6         // INT2: inputs truncated to [-2, +1]
 //
 // NOTE: Your software must quantize weights/activations to fit within
 // the target precision range. Values outside the range will wrap (truncate)
