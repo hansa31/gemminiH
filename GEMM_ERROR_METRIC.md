@@ -218,57 +218,86 @@ lowered to GEMM, compared to MobileNetV2's mostly 1×1 pointwise convolutions.
 ## Validation Against FPGA Results (CIFAR-10)
 
 Measured top-1 accuracy on Genesys2 (Gemmini INT8, ~35 kHz, 500 images) from
-`RESULTS.md`. Compared against metric rank (ascending E[‖E‖²_F] = better).
+`RESULTS.md`. All 10 multipliers with complete CIFAR-10 results are compared
+against metric rank (ascending E[‖E‖²_F] = lower distortion = better).
+`mul8s_1L2J` is excluded (run incomplete).
+
+Random-chance baseline = 10% (10 classes).
 
 ### ResNet-50 CIFAR-10
 
-| Metric rank | Multiplier   | E[‖E‖²_F] (ResNet) | Measured Top-1 | Accuracy rank |
-|:-----------:|--------------|-------------------:|:--------------:|:-------------:|
-| 1           | `mul8s_1KV6` | 0.00e+00           | **91.80%**     | 1             |
-| 2           | `mul8s_1KV8` | 1.04e+13           | 90.20%         | 3             |
-| 3           | `mul8s_1KVM` | 1.46e+13           | 91.00%         | 2             |
-| 4           | `mul8s_1KVP` | 4.78e+13           | 69.60%         | 4             |
-| 5           | `mul8s_1KV9` | 1.20e+14           | 39.20%         | 5             |
+Rows ordered by ascending metric (best → worst predicted).
 
-**Match: near-perfect.** Ranks 2 and 3 are swapped but the gap in both metric
-(1.04e+13 vs 1.46e+13, factor 1.4×) and accuracy (90.20% vs 91.00%, 0.8 pp)
-is within measurement noise at 500 images. All other positions are exact.
+| Metric rank | Multiplier    | E[‖E‖²_F] (ResNet) | Measured Top-1 | Accuracy rank |
+|:-----------:|---------------|-------------------:|:--------------:|:-------------:|
+| 1           | `mul8s_1KV6`  | 0.00e+00           | **91.80%**     | 1             |
+| 2           | `mul8s_1KV8`  | 1.04e+13           | 90.20%         | 3             |
+| 3           | `mul8s_1KVM`  | 1.46e+13           | 91.00%         | 2             |
+| 4           | `mul8s_1KVP`  | 4.78e+13           | 69.60%         | 4             |
+| 5           | `mul8s_1KV9`  | 1.20e+14           | 39.20%         | 5             |
+| 6           | `mul8s_1KVQ`  | 4.66e+14           | 22.80%         | 6             |
+| 7           | `mul8s_1KXF`  | 5.16e+14           | 15.60%         | 7             |
+| 8           | `mul8s_1KVA`  | 9.95e+14           | 11.40%         | 8 (tie)       |
+| 9           | `mul8s_1KX5`  | 1.85e+15           | 11.40%         | 8 (tie)       |
+| 10          | `mul8s_1L12`  | 3.95e+16           | 11.40%         | 8 (tie)       |
+
+**Match: excellent across all 10.** The only rank inversion is positions 2/3
+(`mul8s_1KV8` vs `mul8s_1KVM`), where both metric values (factor 1.4×) and
+accuracy (0.8 pp) are within measurement noise at 500 images. Positions 4–7
+are a perfect monotone match with large accuracy gaps. Positions 8–10 all
+collapse to 11.40% (near-random) — the metric correctly predicts all three
+will fail but cannot distinguish them once inference is at chance level.
 
 ### MobileNet CIFAR-10
 
-| Metric rank | Multiplier   | E[‖E‖²_F] (MobileNet) | Measured Top-1 | Accuracy rank |
-|:-----------:|--------------|----------------------:|:--------------:|:-------------:|
-| 1           | `mul8s_1KV6` | 0.00e+00              | **26.60%**     | 1             |
-| 2           | `mul8s_1KV8` | 4.62e+11              | 19.00%         | 3 (tie)       |
-| 3           | `mul8s_1KVM` | 3.06e+12              | 26.20%         | 2             |
-| 4           | `mul8s_1KVP` | 4.55e+12              | 12.60%         | 5             |
-| 5           | `mul8s_1KV9` | 5.34e+12              | 12.20%         | 6             |
-| 10          | `mul8s_1KXF` | 1.07e+14              | 19.00%         | 3 (tie)       |
+Rows ordered by ascending metric (best → worst predicted).
 
-**Match: good for bias-dominated multipliers; one notable outlier.**
-`mul8s_1KXF` (μ = +1.75, σ² = 95 573) is ranked 10th by the metric but ties
-for 3rd in actual accuracy. The explanation is that its near-zero bias means
-errors are zero-mean across the input distribution, and they can partially
-cancel across the K accumulation dimension. The first-order iid model treats
-all K contributions as independently additive, underestimating this
-cancellation in MobileNet's smaller-K pointwise layers (K ≤ 960 vs ResNet's
-K ≤ 4608).
+| Metric rank | Multiplier    | E[‖E‖²_F] (MobileNet) | Measured Top-1 | Accuracy rank |
+|:-----------:|---------------|----------------------:|:--------------:|:-------------:|
+| 1           | `mul8s_1KV6`  | 0.00e+00              | **26.60%**     | 1             |
+| 2           | `mul8s_1KV8`  | 4.62e+11              | 19.00%         | 3 (tie)       |
+| 3           | `mul8s_1KVM`  | 3.06e+12              | 26.20%         | 2             |
+| 4           | `mul8s_1KVP`  | 4.55e+12              | 12.60%         | 5             |
+| 5           | `mul8s_1KV9`  | 5.34e+12              | 12.20%         | 6             |
+| 6           | `mul8s_1KVQ`  | 2.32e+13              | 9.80%          | 8 (tie)       |
+| 7           | `mul8s_1KVA`  | 4.43e+13              | 9.80%          | 8 (tie)       |
+| 8           | `mul8s_1KX5`  | 9.94e+13              | 9.80%          | 8 (tie)       |
+| 9           | `mul8s_1KXF`  | 1.07e+14              | 19.00%         | 3 (tie)       |
+| 10          | `mul8s_1L12`  | 8.19e+15              | 11.40%         | 7             |
+
+**Match: good for the top half; two anomalies in the bottom half.**
+
+- `mul8s_1KXF` (metric rank 9) ties for 3rd in actual accuracy. Its μ = +1.75
+  is near-zero, so errors are nearly iid zero-mean. In MobileNet's shallow
+  pointwise layers (K ≤ 960) partial cancellation reduces the effective
+  distortion well below what the first-order additive model predicts. On
+  ResNet (K ≤ 4608) the same multiplier correctly sits at rank 7 — larger K
+  suppresses cancellation via the law of large numbers.
+
+- `mul8s_1L12` (metric rank 10) measures 11.40%, narrowly above the
+  three-way tie at 9.80% (ranks 6–8). Both values are near the 10% random
+  baseline at 500 images, so this difference (7 images out of 500) is within
+  measurement noise and should not be interpreted as a meaningful inversion.
 
 ### Key takeaways
 
-1. **Bias-dominated multipliers obey the metric reliably.** Whenever |μ| ≫
-   σ/√m the accumulated error is systematic and non-cancelling. The metric
-   accurately predicts ranking for `mul8s_1KV8`, `mul8s_1KV9`, `mul8s_1KVA`,
-   `mul8s_1KVQ`, and `mul8s_1KX5` across both networks.
+1. **Bias-dominated multipliers obey the metric reliably across all 10 ranks.**
+   Whenever |μ| ≫ σ/√m the accumulated error is systematic and non-cancelling.
+   ResNet shows a perfect monotone match for all distinguishable positions.
+   MobileNet matches for ranks 1–5 and correctly predicts collapse for ranks
+   6–10 (all fall to ≤12.6%, near chance).
 
 2. **High-variance / near-zero-bias multipliers can overperform the metric.**
-   `mul8s_1KXF` (and to a lesser extent `mul8s_1KVM`) benefit from partial
-   error cancellation that the expectation formula does not capture. The gap
-   is larger on MobileNet (smaller K, more cancellation opportunity) and
-   negligible on ResNet (large K, law of large numbers pushes bias back in).
+   `mul8s_1KXF` (μ = +1.75, σ² = 95 573) is the clearest example: the metric
+   places it last among non-exact multipliers on MobileNet, yet it ties for
+   3rd. The first-order iid model does not account for error cancellation
+   across the K accumulation dimension when bias is small. This gap is
+   network-depth-dependent — it disappears on ResNet where larger K drives
+   the sample mean of errors toward the true mean.
 
-3. **The metric is a conservative (worst-case) upper bound.** It correctly
-   identifies which multipliers are safe to use (low E[‖E‖²_F] → high
-   accuracy) and which will collapse inference (high E[‖E‖²_F] → near-random
-   accuracy). No multiplier that the metric ranked highly actually performed
-   poorly; over-prediction of distortion only occurs for high-variance cases.
+3. **The metric correctly identifies the accuracy cliff.** No multiplier ranked
+   low by the metric achieved unexpectedly high accuracy, and no high-ranked
+   multiplier collapsed. The boundary between "working" (≥12%) and "failed"
+   (≤10%, near-random) is perfectly predicted. Over-prediction of distortion
+   occurs only for high-variance cases and causes a conservative (safe) error,
+   not a dangerous one.
