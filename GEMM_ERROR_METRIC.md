@@ -304,3 +304,179 @@ their high metric values.
    correctly predicted. Over-prediction of distortion occurs only for
    high-variance/near-zero-bias cases and is conservative (safe), not
    dangerous.
+
+---
+
+## Why the Frobenius Metric Does Not Perfectly Predict Comparative Accuracy
+
+The accumulated metric E[‖E‖²_F] = Σ_l n_l p_l (m_l σ² + m_l² μ²) sums
+the **bias component** B = Σ n_l p_l m_l² μ² and the **variance component**
+V = Σ n_l p_l m_l σ² as a flat linear combination. However, these two terms
+represent **fundamentally different damage mechanisms** that cannot be
+linearly combined.
+
+### Decomposition and rank correlation
+
+| Metric variant | ResNet-50 Top-1 ρ | MobileNet Top-1 ρ |
+|:---------------|:-----------------:|:------------------:|
+| Full metric (B + V) | **+0.939** | +0.564 |
+| Bias-only (B)       | +0.891     | **+0.891** |
+| Variance-only (V)   | +0.612     | +0.345 |
+
+(Spearman ρ between metric and measured accuracy; 10 multipliers.)
+
+The full metric achieves high correlation on ResNet (+0.939) but **breaks
+down on MobileNet (+0.564)** because the variance term swamps the bias term
+for `mul8s_1KXF`, pushing it to rank 9 when it should be rank 3. The
+bias-only component is **consistently strong** (ρ = +0.891 on both networks).
+
+### Mechanism 1 — Bias: cascading ReLU neuron death (m² μ² term)
+
+Consider the linearised error propagation through a ReLU-gated layer. Let
+x_l = ReLU(z_l) be the exact activation at layer l, and let ε_l be the
+GEMM error vector at that layer. The approximate activation is:
+
+$$\mathbf{x}'_l = \text{ReLU}(\mathbf{z}_l + \boldsymbol{\varepsilon}_l)$$
+
+To first order (valid when ‖ε_l‖ ≪ ‖z_l‖):
+
+$$\boldsymbol{\delta}_l \;=\; \mathbf{x}'_l - \mathbf{x}_l \;\approx\; \mathbf{D}_l \, \boldsymbol{\varepsilon}_l$$
+
+where D_l = diag(𝟙{z_{l,j} > 0}) is the ReLU gate matrix (1 for active
+neurons, 0 for dead). This gate passes the error through for active neurons
+and clips it for dead neurons.
+
+For a **bias-dominated** multiplier (σ ≪ |μ|), the per-GEMM-element error
+is ε ≈ m_l · μ, approximately the **same for all output channels j**. Every
+active neuron receives the same shift. The key consequence for
+classification is that since all channels shift equally, the **argmax is
+preserved within that layer** — the bias cancels in inter-channel
+differences:
+
+$$e_{ij} - e_{ij^*} = \sum_k [\varepsilon(A_{ik}, B_{kj}) - \varepsilon(A_{ik}, B_{kj^*})] \;\approx\; 0$$
+
+The damage instead comes through **ReLU clipping at each layer**. The
+uniform shift m_l · μ pushes neurons near zero across the ReLU boundary:
+negative bias kills marginally-active neurons; positive bias creates
+spurious activations. For zero-centred pre-activations z ~ N(0, σ²_z) with
+σ_z = √m_l · σ_{AB} (where σ_{AB} = √(E[A²]·E[B²]) ≈ 5461 for uniform
+INT8), the extra fraction of neurons disturbed per layer is:
+
+$$\Delta p_l \;=\; \Phi\!\left(\frac{\sqrt{m_l}\,|\mu|}{\sigma_{AB}}\right) - \frac{1}{2}$$
+
+These disturbed activations become **wrong inputs to the next layer**, where
+the bias adds again. The effect **compounds multiplicatively**:
+
+$$\text{BCF} \;=\; \prod_{l=1}^{T}\bigl(1 - \Delta p_l\bigr)$$
+
+BCF (Bias Cascade Factor) gives the fraction of signal surviving cascading
+ReLU damage. BCF = 1 means no bias damage; BCF → 0 means signal
+destruction.
+
+### Mechanism 2 — Variance: additive argmax perturbation (m σ² term)
+
+For a **variance-dominated** multiplier (|μ| ≈ 0, large σ), different
+output channels j receive **different random shifts** (because they use
+different weight columns B_{kj}). The inter-channel error difference:
+
+$$e_{ij} - e_{ij^*} = \sum_k [\varepsilon(A_{ik}, B_{kj}) - \varepsilon(A_{ik}, B_{kj^*})] \;\sim\; \mathcal{N}(0,\; 2\,m_l\,\sigma^2)$$
+
+has **zero mean but nonzero variance**. This directly perturbs the argmax —
+classifications can flip without any ReLU interaction.
+
+However, at the next layer, **Batch Normalisation** (with stored running
+statistics from training) divides activations by σ_BN, scaling down the
+noise. The zero-mean property is critical: BN's mean-subtraction does not
+amplify zero-mean noise, and its std-division attenuates it. The noise
+contribution at each layer is therefore **additive and partially
+normalised**, not multiplicatively cascading.
+
+We quantify noise strength with the **Noise-to-Signal Ratio**:
+
+$$\text{NSR} \;=\; \frac{\sigma}{\sigma_{AB}}$$
+
+This ratio is **K-independent** (the same at every layer) and characterises
+the per-element noise level relative to the typical INT8 product magnitude.
+
+### Why these cannot be linearly summed
+
+| Property | Bias (m² μ²) | Variance (m σ²) |
+|----------|:-------------|:----------------|
+| Per-layer effect | Uniform shift across channels | Independent random shift per channel |
+| Argmax at single layer | Preserved (shift cancels) | Directly disturbed |
+| Cross-layer propagation | **Multiplicative** (ReLU cascade) | **Additive** (BN-normalised) |
+| Damage mechanism | Signal destruction (neuron death) | Output noise (logit perturbation) |
+
+The Frobenius metric sums B + V, but one cascades multiplicatively through
+ReLU while the other is additive through BN. Weighting them equally in a
+linear combination produces incorrect rankings when one mechanism dominates
+(e.g., `mul8s_1KXF` where V ≫ B).
+
+---
+
+## Extended Metric: BCF and NSR
+
+### Computed values
+
+**ResNet-50 CIFAR-10** (T = 54 GEMM layers)
+
+| Multiplier | BCF | NSR | Top-1 |
+|------------|:---:|:---:|:-----:|
+| `mul8s_1KV6` *(exact)* | 1.0000 | 0.0000 | **91.80%** |
+| `mul8s_1KVM` | 0.9731 | 0.0096 | 91.00% |
+| `mul8s_1KV8` | 0.8725 | 0.0003 | 90.20% |
+| `mul8s_1KVP` | 0.7821 | 0.0096 | 69.60% |
+| `mul8s_1KV9` | 0.6279 | 0.0007 | 39.20% |
+| `mul8s_1KVQ` | 0.4033 | 0.0097 | 22.80% |
+| `mul8s_1KXF` | 0.8261 | **0.0566** | 15.60% |
+| `mul8s_1KVA` | 0.2580 | 0.0018 | 11.40% |
+| `mul8s_1KX5` | 0.1645 | 0.0255 | 11.40% |
+| `mul8s_1L12` | 0.1740 | **0.4942** | 11.40% |
+
+**MobileNet CIFAR-10** (T = 36 GEMM layers)
+
+| Multiplier | BCF | NSR | Top-1 |
+|------------|:---:|:---:|:-----:|
+| `mul8s_1KV6` *(exact)* | 1.0000 | 0.0000 | **26.60%** |
+| `mul8s_1KVM` | 0.9907 | 0.0096 | 26.20% |
+| `mul8s_1KV8` | 0.9542 | 0.0003 | 19.00% |
+| `mul8s_1KVP` | 0.9190 | 0.0096 | 12.60% |
+| `mul8s_1KV9` | 0.8523 | 0.0007 | 12.20% |
+| `mul8s_1KVQ` | 0.7326 | 0.0097 | 9.80% |
+| `mul8s_1KXF` | 0.9364 | **0.0566** | 19.00% |
+| `mul8s_1KVA` | 0.6292 | 0.0018 | 9.80% |
+| `mul8s_1KX5` | 0.5400 | 0.0255 | 9.80% |
+| `mul8s_1L12` | 0.5505 | **0.4942** | 11.40% |
+
+### Interpretation
+
+**BCF alone achieves Spearman ρ = +0.891 on both networks** — consistently
+better than the original full metric on MobileNet (+0.564), and only
+slightly below the full metric on ResNet (+0.939).
+
+The one case BCF misses is `mul8s_1KXF` **on ResNet**: BCF = 0.826 (high
+survival, predicting ~85% accuracy), yet actual accuracy is 15.6%. The gap
+is explained by its NSR = 0.057 — the highest among non-collapsed
+multipliers. On a deep network (T = 54), this per-element noise accumulates
+across layers and destroys the argmax at the final classifier, even though
+the ReLU cascade barely damages signal propagation.
+
+On **MobileNet** the same 1KXF (BCF = 0.936, NSR = 0.057) achieves 19.0%
+— comparable to `mul8s_1KV8` (BCF = 0.954, NSR = 0.0003). Here the shorter
+depth (T = 36), residual connections, and lower baseline accuracy make the
+network more tolerant of variance noise.
+
+### Practical ranking rule
+
+For approximate multiplier selection:
+
+1. **Compute BCF** for the target network. Multipliers with BCF ≲ 0.5 will
+   almost certainly collapse to near-random accuracy.
+2. **Check NSR.** Among multipliers with acceptable BCF, prefer those with
+   lower NSR. Multipliers with NSR > 0.05 carry significant noise risk on
+   deep networks (T ≥ 50).
+3. **BCF is the primary axis; NSR is the secondary axis.** A multiplier
+   with high BCF and low NSR (e.g., `mul8s_1KV8`: BCF ≈ 0.87–0.95,
+   NSR = 0.0003) will reliably maintain accuracy. A multiplier with high
+   BCF but high NSR (e.g., `mul8s_1KXF`: BCF ≈ 0.83–0.94, NSR = 0.057)
+   is safe on shallow networks but risky on deep ones.
