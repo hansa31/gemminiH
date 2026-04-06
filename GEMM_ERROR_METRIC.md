@@ -669,3 +669,322 @@ as √m (central limit theorem) while bias accumulates as m (coherent
 summation). The bias term m_l² μ² remains the primary damage driver;
 the corrected variance term √m_l σ² correctly captures the secondary
 noise contribution without over-counting.
+
+---
+
+## Architecture-Aware Variance Attenuation (ReLU + Skip Connections)
+
+The √m correction above addresses the **intra-layer** scaling of variance
+noise. This section addresses the **inter-layer** propagation: variance
+noise generated at layer l is attenuated by every subsequent ReLU
+non-linearity before reaching the classifier, while bias damage is not.
+
+### ReLU halves zero-mean noise power
+
+For a random variable x ~ N(0, σ²), the output of ReLU has power:
+
+$$\mathbb{E}\bigl[\text{ReLU}(x)^2\bigr] = \frac{\sigma^2}{2}$$
+
+Each ReLU stage therefore attenuates zero-mean noise power by a factor
+r = 0.5. In a sequential T-layer network, noise generated at layer l
+would pass through (T − 1 − l) ReLU stages before reaching the output,
+giving an attenuation factor of r^(T−1−l).
+
+**Bias is not attenuated** this way: a coherent shift m·μ does not have
+zero mean — it moves the entire distribution, so ReLU clips one tail
+(neuron death) rather than symmetrically halving the power. The bias
+damage from each layer persists unattenuated through subsequent layers.
+
+The attenuated metric is therefore:
+
+$$\boxed{M_{\text{attenuated}} = \sum_{l=1}^{T} n_l\,p_l\left[m_l\,\sigma^2 \cdot r^{R(l)} + m_l^2\,\mu^2\right]}$$
+
+where R(l) is the **effective number of ReLU stages** between layer l
+and the network output, and r = 0.5.
+
+### The problem with naive ReLU counting
+
+In a purely sequential network, R(l) = T − 1 − l (every layer has a
+ReLU). Applying this to our networks:
+
+| Network | Result at r = 0.5 | Issue |
+|---------|:-:|---|
+| MobileNet | ρ = +0.950 (Top-5) | Works well |
+| ResNet-50 | ρ = +0.900 (Top-5) | No improvement over original |
+
+**Why does the naive model fail on ResNet?** A parameter sweep reveals
+ResNet needs r ≈ 0.92 (almost no attenuation) while MobileNet needs
+r ≈ 0.41 (close to theory). The explanation is **residual skip
+connections**.
+
+### Skip connections bypass ReLU attenuation
+
+In a ResNet bottleneck block:
+
+```
+       x ──────────────────────────────────┐
+       │                                    │ (identity or projection)
+       ▼                                    │
+   [1×1 conv → BN → ReLU]                  │
+       ▼                                    │
+   [3×3 conv → BN → ReLU]                  │
+       ▼                                    │
+   [1×1 conv → BN]                          │
+       ▼                                    │
+       ⊕ ←──────────────────────────────────┘
+       ▼
+     ReLU
+       ▼
+       y = ReLU(F(x) + x)
+```
+
+For noise propagating **from earlier blocks** through block b:
+
+- **Skip path**: noise passes directly from x to the resadd — zero ReLU
+  crossings within the block.
+- **Main path F(x)**: noise traverses 2–3 internal ReLUs — heavy
+  attenuation.
+
+Since both paths are summed at the resadd and the skip path carries the
+full signal, the skip path **dominates** noise propagation. The noise
+effectively bypasses the intra-block ReLUs and only encounters the
+**single post-resadd ReLU** at the block output.
+
+This means each residual block contributes **1 effective ReLU crossing**
+for noise propagation, regardless of how many conv layers (and internal
+ReLUs) are inside it.
+
+### Effective ReLU counting algorithm
+
+For a layer at index l in block b, the effective number of ReLU stages
+R(l) between layer l and the network output is:
+
+1. **Within block b**: 1 effective ReLU (the post-resadd ReLU), regardless
+   of the layer's position within the block.
+2. **For each subsequent block b+1, ..., B**: add 1 effective ReLU per
+   block (the post-resadd ReLU that noise must traverse).
+3. **Standalone layers** (stem conv, final FC): if not the last layer,
+   add 1 ReLU per standalone stage.
+4. **Final classifier (FC)**: contributes 0 ReLUs (no activation after
+   the logit output).
+
+### Effective ReLU counts
+
+**ResNet-50** (54 GEMM layers → 16 residual blocks + stem + FC = 18 stages):
+
+| Block | Layers | Type | Eff. ReLUs from here |
+|-------|--------|------|:--------------------:|
+| Stem (conv_1) | 0 | standalone | 17 |
+| layer1.0 | 1–4 | proj. block | 16 |
+| layer1.1 | 5–7 | identity | 15 |
+| layer1.2 | 8–10 | identity | 14 |
+| layer2.0 | 11–14 | proj. block | 13 |
+| layer2.1 | 15–17 | identity | 12 |
+| layer2.2 | 18–20 | identity | 11 |
+| layer2.3 | 21–23 | identity | 10 |
+| layer3.0 | 24–27 | proj. block | 9 |
+| layer3.1 | 28–30 | identity | 8 |
+| layer3.2 | 31–33 | identity | 7 |
+| layer3.3 | 34–36 | identity | 6 |
+| layer3.4 | 37–39 | identity | 5 |
+| layer3.5 | 40–42 | identity | 4 |
+| layer4.0 | 43–46 | proj. block | 3 |
+| layer4.1 | 47–49 | identity | 2 |
+| layer4.2 | 50–52 | identity | 1 |
+| FC (fc_54) | 53 | standalone | 0 |
+
+Noise from the stem (layer 0) passes through **17 effective ReLU stages**,
+not the naive 53. Compression ratio: 17/53 = **0.321**.
+
+**MobileNetV2** (36 GEMM layers → 11 identity blocks + 9 standalone stages = 20 stages):
+
+MobileNetV2 uses inverted residual bottleneck blocks with skip connections
+only when stride = 1 AND input channels == output channels. The GEMM
+layers inside skip-connected blocks (expand + project) contribute 1
+effective ReLU per block, while standalone blocks (stride-2 or
+channel-changing) contribute 1 ReLU per standalone stage.
+
+| Block | Layers | Type | Eff. ReLUs from here |
+|-------|--------|------|:--------------------:|
+| stem (conv_1) | 0 | standalone | 19 |
+| block0 (16→16) | 1 | standalone | 18 |
+| block1 (16→24, stride=2) | 2–3 | standalone | 17 |
+| block2 (24→24) | 4–5 | identity (skip) | 16 |
+| block3 (24→32, stride=2) | 6–7 | standalone | 15 |
+| block4 (32→32) | 8–9 | identity (skip) | 14 |
+| block5 (32→32) | 10–11 | identity (skip) | 13 |
+| block6 (32→64, stride=2) | 12–13 | standalone | 12 |
+| block7 (64→64) | 14–15 | identity (skip) | 11 |
+| block8 (64→64) | 16–17 | identity (skip) | 10 |
+| block9 (64→64) | 18–19 | identity (skip) | 9 |
+| block10 (64→96, ch. change) | 20–21 | standalone | 8 |
+| block11 (96→96) | 22–23 | identity (skip) | 7 |
+| block12 (96→96) | 24–25 | identity (skip) | 6 |
+| block13 (96→160, stride=2) | 26–27 | standalone | 5 |
+| block14 (160→160) | 28–29 | identity (skip) | 4 |
+| block15 (160→160) | 30–31 | identity (skip) | 3 |
+| block16 (160→320, ch. change) | 32–33 | standalone | 2 |
+| head expand | 34 | standalone | 1 |
+| FC (fc_53) | 35 | standalone | 0 |
+
+Noise from the stem passes through **19 effective ReLU stages** (vs naive
+35). Compression ratio: 19/35 = **0.543**.
+
+The key difference: ResNet has a much higher compression ratio (0.321 vs
+0.543) because **52 of its 54 layers are inside residual blocks** — the
+skip connections shield noise from intra-block ReLU attenuation far more
+effectively than in MobileNet, where only 22 of 36 layers have skip
+protection.
+
+### Equivalent naive r
+
+The architecture-aware model at r = 0.5 is equivalent to the naive
+(per-layer) model at a higher effective r:
+
+$$r_{\text{naive, equiv}} = 0.5^{\,R_{\text{eff}}(0)\,/\,(T-1)}$$
+
+| Network | T−1 | R_eff(0) | r_naive_equiv | Previous sweep best |
+|---------|:---:|:--------:|:-------------:|:-------------------:|
+| ResNet-50 | 53 | 17 | **0.801** | r ≈ 0.92 |
+| MobileNet | 35 | 19 | **0.686** | r ≈ 0.41 |
+
+The architecture-aware model correctly predicts that ResNet needs less
+attenuation (r_equiv = 0.80) than MobileNet (r_equiv = 0.69), matching
+the direction of the empirical sweep. The remaining gap for ResNet
+(0.80 vs 0.92) likely reflects additional noise preservation from batch
+normalisation's learnt affine transform and the quantisation pipeline.
+
+### Computed results
+
+**ResNet-50 CIFAR-10** — architecture-aware attenuated metric (Top-5)
+
+| Rank | Multiplier | M_attenuated | V_atten | B | Top-5 |
+|:----:|------------|-------------:|--------:|--:|:-----:|
+| 1 | `mul8s_1KV6` *(exact)* | 0.00e+00 | 0.00e+00 | 0.00e+00 | 99.60% |
+| 2 | `mul8s_1KVM` | 1.26e+12 | 8.49e+11 | 4.14e+11 | **99.80%** |
+| 3 | `mul8s_1KV8` | 1.04e+13 | 6.80e+08 | 1.04e+13 | 99.60% |
+| 4 | `mul8s_1KVP` | 3.44e+13 | 8.52e+11 | 3.36e+13 | 96.60% |
+| 5 | `mul8s_1KXF` | 5.00e+13 | 2.97e+13 | 2.03e+13 | 76.00% |
+| 6 | `mul8s_1KV9` | 1.20e+14 | 5.03e+09 | 1.20e+14 | 76.60% |
+| 7 | `mul8s_1KVQ` | 4.52e+14 | 8.72e+11 | 4.51e+14 | 50.60% |
+| 8 | `mul8s_1KVA` | 9.95e+14 | 3.05e+10 | 9.95e+14 | 50.60% |
+| 9 | `mul8s_1KX5` | 1.76e+15 | 6.04e+12 | 1.75e+15 | 50.60% |
+| 10 | `mul8s_1L12` | 3.91e+15 | 2.26e+15 | 1.64e+15 | 47.60% |
+
+**MobileNet CIFAR-10** — architecture-aware attenuated metric (Top-5)
+
+| Rank | Multiplier | M_attenuated | V_atten | B | Top-5 |
+|:----:|------------|-------------:|--------:|--:|:-----:|
+| 1 | `mul8s_1KV6` *(exact)* | 0.00e+00 | 0.00e+00 | 0.00e+00 | 78.40% |
+| 2 | `mul8s_1KVM` | 2.32e+11 | 2.14e+11 | 1.84e+10 | **79.60%** |
+| 3 | `mul8s_1KV8` | 4.60e+11 | 1.71e+08 | 4.60e+11 | 75.60% |
+| 4 | `mul8s_1KVP` | 1.71e+12 | 2.15e+11 | 1.49e+12 | 65.40% |
+| 5 | `mul8s_1KV9` | 5.32e+12 | 1.27e+09 | 5.32e+12 | 55.60% |
+| 6 | `mul8s_1KXF` | 8.39e+12 | 7.49e+12 | 9.02e+11 | **53.00%** |
+| 7 | `mul8s_1KVQ` | 2.03e+13 | 2.20e+11 | 2.00e+13 | 47.80% |
+| 8 | `mul8s_1KVA` | 4.42e+13 | 7.69e+09 | 4.42e+13 | 47.40% |
+| 9 | `mul8s_1KX5` | 7.93e+13 | 1.52e+12 | 7.77e+13 | 45.00% |
+| 10 | `mul8s_1L12` | 6.44e+14 | 5.71e+14 | 7.30e+13 | 47.60% |
+
+### Resolution of the 1KXF anomaly
+
+The architecture-aware model resolves the `mul8s_1KXF` ranking anomaly
+that plagued the original metric:
+
+| Network | Original rank | Arch-aware rank | Actual rank (Top-5) |
+|---------|:------------:|:---------------:|:-------------------:|
+| ResNet-50 | 7 | **5** | 6 |
+| MobileNet | 9 | **6** | 6 |
+
+On MobileNet, 1KXF moves from rank 9 to rank 6 — **exactly matching**
+its actual accuracy rank. On ResNet, it moves from rank 7 to rank 5
+(actual = 6), off by one position with only 0.6 pp separating it from
+1KV9 (76.0% vs 76.6%).
+
+The mechanism: 1KXF has σ² = 95 573 but μ = +1.75 (near-zero bias). The
+original metric over-weights its variance by treating all T layers' noise
+contributions equally. The attenuated metric correctly recognises that
+noise from early layers is exponentially attenuated by ReLU stages before
+reaching the classifier, dramatically reducing the effective variance
+contribution. For 1KXF:
+
+- Variance reduction factor (vs original): **0.060 (ResNet), 0.070 (MobileNet)**
+- The bias term (m² μ² = 2.03e+13 for ResNet) now **dominates** or is
+  comparable to the attenuated variance — correctly reflecting that 1KXF's
+  near-zero bias makes it relatively benign.
+
+### Correlation analysis
+
+| Network | Metric | Spearman ρ (Top-5) | Inversions |
+|---------|--------|:------------------:|:----------:|
+| **ResNet-50** | Original | +0.900 | 2 |
+| | **Arch-Aware (r=0.5)** | **+0.933** | **1** |
+| **MobileNet** | Original | +0.800 | 6 |
+| | **Arch-Aware (r=0.5)** | **+0.950** | **2** |
+
+Combined improvement: **8 inversions → 3 inversions** across both networks.
+
+### Analysis of remaining inversions
+
+**1. `mul8s_1KV6` vs `mul8s_1KVM` (both networks)**
+
+The exact multiplier ranks at metric position 1 but 1KVM achieves
+marginally higher accuracy (99.80% vs 99.60% on ResNet, 79.60% vs
+78.40% on MobileNet). This is measurement noise from the 500-image
+test set — the 95% binomial confidence interval is ±0.55% at these
+accuracy levels. No metric can resolve this.
+
+**2. `mul8s_1KV9` vs `mul8s_1KXF` (ResNet only)**
+
+Metric ranks 1KXF slightly better (5.00e+13 vs 1.20e+14) while actual
+accuracy is 76.0% vs 76.6% — a 0.6 pp gap well within measurement noise.
+Effectively correct.
+
+**3. `mul8s_1KVA`/`mul8s_1KX5` vs `mul8s_1L12` (MobileNet only)**
+
+All three at 45.0%–47.6% Top-5, below the 50% random baseline. These
+multipliers have all collapsed and ranking among them is meaningless.
+
+### Structural sums
+
+The architecture-aware attenuation reduces the effective variance weight
+coefficient S₁:
+
+$$S_{1,\text{atten}} = \sum_l n_l\,p_l\,m_l \cdot 0.5^{R(l)}$$
+
+| Network | S₁ (original) | S₁ (attenuated) | α = S₁_att/S₁ |
+|---------|:-------------:|:----------------:|:--------------:|
+| ResNet-50 | 5.191e+09 | 3.109e+08 | 0.0599 |
+| MobileNet | 1.115e+09 | 7.835e+07 | 0.0703 |
+
+The variance weight is reduced by **~14–17×** through architecture-aware
+ReLU attenuation. The bias coefficient S₂ = Σ n_l p_l m_l² is unchanged.
+
+### Summary and comparison of all metric variants
+
+| | Original | √m Corrected | Arch-Aware |
+|---|:--------:|:------------:|:----------:|
+| **Formula (variance term)** | n_l p_l m_l σ² | n_l p_l √m_l σ² | n_l p_l m_l σ² · 0.5^R(l) |
+| **Bias term** | n_l p_l m_l² μ² | n_l p_l m_l² μ² | n_l p_l m_l² μ² |
+| **Derivation** | Frobenius norm | CLT amplitude scaling | ReLU power halving + skip topology |
+| **Free parameters** | 0 | 0 | 0 |
+| **ResNet-50 ρ (Top-5)** | +0.900 | +0.955 | **+0.933** |
+| **MobileNet ρ (Top-5)** | +0.800 | +0.952 | **+0.950** |
+| **ResNet-50 inv. (Top-5)** | 2 | 2 | **1** |
+| **MobileNet inv. (Top-5)** | 6 | 3 | **2** |
+| **Total inversions** | 8 | 5 | **3** |
+| **Architecture-dependent?** | No | No | Yes (requires block structure) |
+
+The √m correction and the architecture-aware attenuation address the
+same underlying phenomenon (variance over-counting) from complementary
+angles: √m corrects the **intra-layer** scaling, while the
+architecture-aware model corrects the **inter-layer** propagation. Both
+achieve ρ ≥ 0.93 on both networks with zero free parameters.
+
+For practical use:
+- The **√m corrected metric** is simpler and requires only the GEMM
+  dimensions — use it when the network architecture is not known in detail.
+- The **architecture-aware metric** is more principled and requires
+  knowledge of the block structure (which layers have skip connections) —
+  use it when the architecture is fully specified, as in hardware
+  deployment scenarios.
